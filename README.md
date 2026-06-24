@@ -21,7 +21,7 @@ This plugin packages [bol-van/zapret2](https://github.com/bol-van/zapret2) into 
 
 - OPNsense 26.1 or later (FreeBSD 14.x).
 - Any WAN type — PPPoE, DHCP, static, all work.
-- The plugin's `setup.sh` will install `luajit`, `jq`, `git-lite`, `pkgconf` from FreeBSD's main repo and compile `dvtws2`. Internet access required for the one-time setup.
+- The plugin's `setup.sh` will install `luajit`, `jq`, `git-lite` or `git`, and `pkgconf` from FreeBSD's main repo and compile `dvtws2`. Internet access required for the one-time setup.
 
 ## Installation
 
@@ -31,7 +31,7 @@ Releases ship as a real FreeBSD `.pkg`. Install with `pkg add` — OPNsense regi
 # On the OPNsense firewall (SSH as root)
 
 fetch -o /tmp/os-zapret2.pkg \
-    https://github.com/ugorur/os-zapret2/releases/latest/download/os-zapret2-1.6.5_3.pkg
+    https://github.com/ugorur/os-zapret2/releases/latest/download/os-zapret2-1.6.5_4.pkg
 # (asset filename tracks PLUGIN_VERSION_PLUGIN_REVISION from Makefile — check the
 #  Releases page for the current version if the URL above 404s)
 
