@@ -1,0 +1,76 @@
+# Changelog
+
+All notable changes to os-zapret2 are documented in this file.
+
+## v1.7.0 - 2026-06-24
+
+### Changed
+
+- Documented the shipped `ipfw divert` + `--sockarg` architecture and clarified why the plugin uses the upstream zapret pfSense-style packet path.
+- Updated package metadata for the `1.7.0` release.
+
+### Fixed
+
+- Hardened `setup.sh` so the FreeBSD package repository is always restored after dependency installation.
+- Added recovery for stale FreeBSD repository backup files left by interrupted setup runs.
+- Made setup tolerate both `git-lite` and `git` package names when installing zapret build dependencies.
+- Kept the plugin install clean by continuing to install external dependencies during setup instead of declaring them as package dependencies.
+
+## v1.6.5_3 - 2026-04-16
+
+### Fixed
+
+- Bumped the package revision so the generated asset name matched the release tag.
+
+## v1.6.5_2 - 2026-04-16
+
+### Changed
+
+- Reverted the runtime packet path to upstream zapret's `ipfw` + divert recipe for better LAN NAT behavior.
+
+## v1.6.5_1 - 2026-04-16
+
+### Changed
+
+- Improved blockcheck fallback summaries, persistent logs, run duration reporting, and pf restore handling.
+
+### Fixed
+
+- Prevented diagnostics from silently falling back to `rutracker.org`.
+- Fixed diagnostics shell handling issues.
+
+## v1.6.5 - 2026-04-16
+
+### Fixed
+
+- Parsed blockcheck `SUMMARY` headings and made diagnostics complete cleanly even when blockcheck reports no winning strategy.
+
+## v1.6.4 - 2026-04-16
+
+### Fixed
+
+- Bounded DNS lookup timeouts in `test_domain.sh` and improved no-answer diagnostics.
+
+## v1.6.3 - 2026-04-16
+
+### Fixed
+
+- Increased diagnostics PHP and configd timeouts so longer blockcheck runs can finish.
+
+## v1.6.1 - 2026-04-16
+
+### Changed
+
+- Published a cleaned release after history sanitization.
+
+## v1.1.0 - 2026-03-27
+
+### Added
+
+- Added an exclude domains list to keep selected sites out of DPI bypass handling.
+
+## v1.0.0 - 2026-03-26
+
+### Fixed
+
+- Corrected README install instructions to match the actual package format.
