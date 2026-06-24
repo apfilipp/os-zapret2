@@ -29,7 +29,7 @@ os-zapret2 installed. Next steps before first use:
 
        /usr/local/opnsense/scripts/OPNsense/Zapret/setup.sh
 
-     This installs luajit, jq, git-lite, pkgconf from FreeBSD's pkg
+     This installs luajit, jq, git-lite or git, pkgconf from FreeBSD's pkg
      repo and clones+compiles bol-van/zapret2.
 
   2. In the GUI: Services > Zapret DPI Bypass > Settings

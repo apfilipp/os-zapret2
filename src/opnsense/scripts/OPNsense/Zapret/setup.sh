@@ -20,27 +20,47 @@ echo "=== zapret2 setup ==="
 # FreeBSD's upstream builds over OPNsense's own forks, which corrupts system
 # packages and dashboard widgets (issue #2).
 FREEBSD_REPO_OVERRIDE=/usr/local/etc/pkg/repos/FreeBSD.conf
+FREEBSD_REPO_BACKUP="${FREEBSD_REPO_OVERRIDE}.bak"
 ENABLED_FREEBSD_REPO=0
 
 restore_freebsd_repo() {
-    if [ "${ENABLED_FREEBSD_REPO}" = "1" ] && [ -f "${FREEBSD_REPO_OVERRIDE}.bak" ]; then
-        mv "${FREEBSD_REPO_OVERRIDE}.bak" "${FREEBSD_REPO_OVERRIDE}"
+    if [ "${ENABLED_FREEBSD_REPO}" = "1" ] && [ -f "${FREEBSD_REPO_BACKUP}" ]; then
+        mv "${FREEBSD_REPO_BACKUP}" "${FREEBSD_REPO_OVERRIDE}"
         ENABLED_FREEBSD_REPO=0
         echo "Restored FreeBSD pkg repo to its original (disabled) state."
     fi
 }
+
+restore_then_exit() {
+    _status="$1"
+    trap - EXIT INT TERM HUP
+    restore_freebsd_repo
+    exit "${_status}"
+}
+
 # Failsafe: restore the repo no matter how the script terminates.
-trap restore_freebsd_repo EXIT INT TERM HUP
+trap restore_freebsd_repo EXIT
+trap 'restore_then_exit 130' INT
+trap 'restore_then_exit 143' TERM
+trap 'restore_then_exit 129' HUP
+
+# Recover from older setup.sh runs that enabled the FreeBSD repo and aborted
+# before moving the backup back into place.
+if [ -f "${FREEBSD_REPO_BACKUP}" ]; then
+    echo "Found previous FreeBSD pkg repo backup; restoring it before continuing."
+    ENABLED_FREEBSD_REPO=1
+    restore_freebsd_repo
+fi
 
 if [ -f "${FREEBSD_REPO_OVERRIDE}" ] && grep -q 'enabled: no' "${FREEBSD_REPO_OVERRIDE}"; then
     echo "Temporarily enabling FreeBSD pkg repo to fetch luajit/jq/git/pkgconf..."
-    cp "${FREEBSD_REPO_OVERRIDE}" "${FREEBSD_REPO_OVERRIDE}.bak"
+    cp "${FREEBSD_REPO_OVERRIDE}" "${FREEBSD_REPO_BACKUP}"
+    ENABLED_FREEBSD_REPO=1
     # Enable ONLY the base FreeBSD repo. Do NOT enable FreeBSD-kmods — no kernel
     # module is needed here, and pulling kmods risks clobbering OPNsense's own.
     cat > "${FREEBSD_REPO_OVERRIDE}" <<'EOF'
 FreeBSD: { enabled: yes }
 EOF
-    ENABLED_FREEBSD_REPO=1
 fi
 
 # Refresh package catalogues. Do NOT use `-f` (force): a forced refresh churns
