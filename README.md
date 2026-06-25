@@ -31,7 +31,7 @@ Releases ship as a real FreeBSD `.pkg`. Install with `pkg add` — OPNsense regi
 # On the OPNsense firewall (SSH as root)
 
 fetch -o /tmp/os-zapret2.pkg \
-    https://github.com/ugorur/os-zapret2/releases/latest/download/os-zapret2-1.7.0.pkg
+    https://github.com/ugorur/os-zapret2/releases/latest/download/os-zapret2-1.7.2.pkg
 # (asset filename tracks PLUGIN_VERSION_PLUGIN_REVISION from Makefile — check the
 #  Releases page for the current version if the URL above 404s)
 
