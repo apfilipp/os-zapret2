@@ -2,6 +2,19 @@
 
 All notable changes to os-zapret2 are documented in this file.
 
+## v1.7.1 - 2026-06-25
+
+### Fixed
+
+- Service start now explicitly enables the ipfw firewall engine
+  (`net.inet.ip.fw.enable=1`) in `configure_ipfw_reinject()`. Previously the
+  service only ran `kldload ipfw`, which initialises `fw.enable` to 1 *only* on
+  the module's first load. On OPNsense ipfw is commonly already resident (e.g.
+  after a Diagnostics → Blockcheck run, which loads ipfw and restores
+  `fw.enable=0` on exit), so the load short-circuited and the firewall stayed
+  disabled. The divert rules were installed but ipfw evaluated nothing, so no
+  traffic was ever diverted to dvtws2 and the bypass silently did nothing.
+
 ## v1.7.0 - 2026-06-24
 
 ### Changed

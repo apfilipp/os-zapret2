@@ -132,6 +132,18 @@ configure_ipfw_reinject() {
     #    on the rule itself (installed below), this gives belt+braces
     #    loop prevention.
     /sbin/sysctl net.inet.ip.fw.one_pass=1 >/dev/null 2>&1
+
+    # 4) Enable the ipfw firewall engine itself. Loading the kld via
+    #    `kldload ipfw` only sets net.inet.ip.fw.enable=1 the FIRST time
+    #    the module is loaded — and on OPNsense ipfw is frequently already
+    #    resident (e.g. blockcheck loads it, then restores enable=0 on
+    #    exit; pf-based setups may have it loaded but idle). In that case
+    #    our `kldstat || kldload` short-circuits, the module never
+    #    re-initialises, and enable stays 0 — so the divert rules below
+    #    are installed but ipfw evaluates NOTHING and not one packet is
+    #    diverted. Set it explicitly on every start. (blockcheck.sh
+    #    already does this for its own run; the service path must too.)
+    /sbin/sysctl net.inet.ip.fw.enable=1 >/dev/null 2>&1
 }
 
 start_service() {
