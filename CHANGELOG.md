@@ -2,6 +2,30 @@
 
 All notable changes to os-zapret2 are documented in this file.
 
+## v1.7.2 - 2026-06-25
+
+### Fixed
+
+- **Diverted traffic no longer dropped by pf (the bypass now actually works
+  end-to-end).** `configure_ipfw_reinject()` enabled ipfw *after* the
+  `pfctl -d; pfctl -e` bounce, which left ipfw registered *behind* pf on the
+  outbound IPv4 pfil chain. pf then built no state for dvtws2's reinjected
+  packets and dropped the server's return traffic, so even general HTTPS hung
+  whenever the service was active. The enable now runs *before* the pf bounce,
+  so pf re-registers behind ipfw (`ipfw:default` → `pf:default-out`) and the
+  diverted/desynced flow completes. Verified live on OPNsense 26.1 / FreeBSD 14
+  (bare-metal PPPoE): blocked domain bypasses, untouched domains keep working.
+- Removed the `net.inet.ip.pfil.outbound=ipfw,pf` ordering sysctls — that OID
+  does not exist on FreeBSD 14, so it was a silent no-op. The hook order is now
+  achieved purely through enable-then-bounce registration ordering.
+
+### Known limitations
+
+- An OPNsense filter reload triggered by unrelated firewall changes can
+  re-register pf ahead of ipfw again, silently disabling the bypass until the
+  next `configctl zapret restart` / Save & Apply. A self-healing re-assert is
+  planned for a future release.
+
 ## v1.7.1 - 2026-06-25
 
 ### Fixed

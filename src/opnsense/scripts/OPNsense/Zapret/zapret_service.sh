@@ -103,47 +103,40 @@ ensure_ipfw_default_accept() {
 }
 
 configure_ipfw_reinject() {
-    # The sequence below comes directly from upstream zapret's pfSense
-    # init script (bol-van/zapret : init.d/pfsense/zapret.sh). This is
-    # the empirically-validated recipe for making ipfw+divert+dvtws2
-    # coexist with pf on FreeBSD without the reinjected-packet loss
-    # that plagues our naive setup on virtio.
+    # Make ipfw's divert fire BEFORE pf on the outbound IPv4 path, so pf
+    # builds correct state for dvtws2's reinjected/desynced packets instead
+    # of dropping their return traffic. THE ORDER OF THESE STEPS MATTERS —
+    # it was verified live on OPNsense 26.1 / FreeBSD 14 (bare-metal PPPoE):
     #
-    # 1) Force ipfw to fire BEFORE pf on the pfil chain. On older FreeBSD
-    #    these sysctls exist; on 14.x they're absent but the effect is
-    #    automatic. Set blindly — no error if missing.
-    /sbin/sysctl net.inet.ip.pfil.outbound=ipfw,pf  >/dev/null 2>&1
-    /sbin/sysctl net.inet.ip.pfil.inbound=ipfw,pf   >/dev/null 2>&1
-    /sbin/sysctl net.inet6.ip6.pfil.outbound=ipfw,pf >/dev/null 2>&1
-    /sbin/sysctl net.inet6.ip6.pfil.inbound=ipfw,pf  >/dev/null 2>&1
+    #   - With pf ahead of ipfw, the blocked site's reinjected ClientHello
+    #     goes out but the server's SYN-ACK is dropped by pf (no matching
+    #     state) and the connection hangs — even general HTTPS breaks.
+    #   - With ipfw ahead of pf, divert fires AND traffic completes: blocked
+    #     domain bypasses, untouched domains keep working.
+    #
+    # The legacy `net.inet.ip.pfil.outbound=ipfw,pf` knob USED to set this
+    # order but DOES NOT EXIST on FreeBSD 14 (the OID is gone), so it can't
+    # be relied on. The working mechanism is pfil hook (re)registration order:
+    #
+    # 1) Enable ipfw FIRST. Enabling links ipfw's hook into the `inet` pfil
+    #    head — but it appends AFTER pf (pf registered at boot). `kldload`
+    #    alone is not enough: on OPNsense ipfw is usually already resident
+    #    (e.g. blockcheck loads it then restores enable=0 on exit), so the
+    #    `kldstat || kldload` guard short-circuits and enable stays 0 — then
+    #    the divert rules are installed but ipfw evaluates NOTHING. Set it
+    #    explicitly, and set it here so the hook is linked before step 2.
+    /sbin/sysctl net.inet.ip.fw.one_pass=1 >/dev/null 2>&1
+    /sbin/sysctl net.inet.ip.fw.enable=1   >/dev/null 2>&1
 
-    # 2) Required on FreeBSD 13+ / newer pfSense/OPNsense: bounce pf so
-    #    it re-registers its pfil hooks AFTER ipfw has registered its
-    #    own. Without this, pf sits in front of ipfw in the hook chain,
-    #    sees our reinjected packets fresh (no divert marker preserved
-    #    across pfil transitions), and drops them for state mismatch —
-    #    which is exactly what we observed: 0 packets on vtnet0 despite
-    #    ipfw divert firing cleanly.
+    # 2) THEN bounce pf. Disabling unlinks pf's hooks; re-enabling appends
+    #    them to the BACK of the chain — i.e. AFTER ipfw, which is now
+    #    already linked. Result on the outbound `inet` head:
+    #        ipfw:default   (runs first → divert)
+    #        pf:default-out (runs second → NAT/state on the final packets)
+    #    Doing this bounce BEFORE enabling ipfw (as a previous revision did)
+    #    leaves ipfw behind pf and silently breaks the bypass.
     /sbin/pfctl -d >/dev/null 2>&1
     /sbin/pfctl -e >/dev/null 2>&1
-
-    # 3) one_pass=1 (default) — reinjected packet resumes from the rule
-    #    AFTER the divert rule. Combined with `not diverted not sockarg`
-    #    on the rule itself (installed below), this gives belt+braces
-    #    loop prevention.
-    /sbin/sysctl net.inet.ip.fw.one_pass=1 >/dev/null 2>&1
-
-    # 4) Enable the ipfw firewall engine itself. Loading the kld via
-    #    `kldload ipfw` only sets net.inet.ip.fw.enable=1 the FIRST time
-    #    the module is loaded — and on OPNsense ipfw is frequently already
-    #    resident (e.g. blockcheck loads it, then restores enable=0 on
-    #    exit; pf-based setups may have it loaded but idle). In that case
-    #    our `kldstat || kldload` short-circuits, the module never
-    #    re-initialises, and enable stays 0 — so the divert rules below
-    #    are installed but ipfw evaluates NOTHING and not one packet is
-    #    diverted. Set it explicitly on every start. (blockcheck.sh
-    #    already does this for its own run; the service path must too.)
-    /sbin/sysctl net.inet.ip.fw.enable=1 >/dev/null 2>&1
 }
 
 start_service() {
