@@ -44,8 +44,10 @@ if [ ! -f "${PIDFILE}" ] || ! kill -0 "$(cat ${PIDFILE})" 2>/dev/null; then
 fi
 
 # Run the control check from the firewall itself. This goes through the
-# divert rule (firewall-originated traffic IS subject to the rule), so it
-# exercises the same path as user LAN traffic.
+# divert rule (firewall-originated traffic IS subject to the rule — even
+# when SOURCE_NETS narrows the rule, zapret_service.sh appends `me` to the
+# source list precisely so this probe keeps working), so it exercises the
+# same path as user LAN traffic.
 if /usr/bin/fetch -T ${CONTROL_TIMEOUT} -q -o /dev/null "${CONTROL_URL}" 2>/dev/null; then
     # Success — reset counter
     rm -f "${STATE}"

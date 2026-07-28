@@ -239,12 +239,27 @@ start_service() {
     #
     # `xmit $wan_dev` scopes to outbound on the WAN device so we only
     # intercept traffic actually leaving the firewall.
+    #
+    # SOURCE_NETS (optional, comma-separated IPv4 hosts/CIDRs) narrows the
+    # divert to traffic FROM those networks. This works because ipfw is
+    # deliberately hooked AHEAD of pf on the outbound chain (see
+    # configure_ipfw_reinject) — the packet still carries the LAN client's
+    # pre-NAT source address when the rule is evaluated. `me` is appended so
+    # firewall-originated traffic (the watchdog's control probe) keeps going
+    # through the bypass and the safety watchdog stays meaningful. Empty
+    # SOURCE_NETS keeps the historical match-everything behavior.
+    local src_spec="any"
+    if [ -n "${SOURCE_NETS}" ]; then
+        src_spec="${SOURCE_NETS},me"
+    fi
     remove_ipfw_rules
     local rulenum=${RULE_BASE}
     local IFS_SAVED="${IFS}"
     IFS=","
     for port in ${PORTS}; do
-        /sbin/ipfw -qf add ${rulenum} divert ${DIVERT_PORT} tcp from any to any ${port} out not diverted not sockarg xmit ${wan_dev}
+        # src_spec is quoted: IFS is "," here and the address list must
+        # reach ipfw as a single token.
+        /sbin/ipfw -qf add ${rulenum} divert ${DIVERT_PORT} tcp from "${src_spec}" to any ${port} out not diverted not sockarg xmit ${wan_dev}
         rulenum=$((rulenum + 1))
     done
     IFS="${IFS_SAVED}"

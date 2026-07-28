@@ -22,6 +22,19 @@
         <help>Comma-separated list of ports to intercept (default: 80,443).</help>
     </field>
     <field>
+        <id>zapret.general.sourcenets</id>
+        <label>Source Networks</label>
+        <type>select_multiple</type>
+        <style>tokenize</style>
+        <allownew>true</allownew>
+        <help><![CDATA[Limit DPI bypass to traffic coming <b>from</b> these IPv4 networks or hosts
+            (e.g. <code>192.168.1.0/24</code> for one LAN, or <code>192.168.1.50</code> for a single device).
+            Leave empty to apply the bypass to <b>all</b> traffic leaving the WAN (default).<br/><br/>
+            Matching happens before NAT, so enter the clients' real LAN addresses.
+            The firewall's own traffic is always included so the safety watchdog keeps
+            exercising the bypass path.]]></help>
+    </field>
+    <field>
         <id>zapret.general.divertport</id>
         <label>Divert Port</label>
         <type>text</type>

@@ -2,6 +2,19 @@
 
 All notable changes to os-zapret2 are documented in this file.
 
+## v1.8.0 - 2026-07-28
+
+### Added
+
+- **Source Networks setting** (General Settings). Optionally limit the DPI
+  bypass to traffic coming from specific IPv4 networks or hosts (e.g. a single
+  LAN subnet like `192.168.1.0/24`, or one device). Empty keeps the previous
+  behavior of intercepting all traffic leaving the WAN. Matching happens on the
+  pre-NAT source address — ipfw is hooked ahead of pf's NAT on the outbound
+  chain, so the LAN client's real address is visible to the divert rule. When
+  the setting is used, `me` is appended to the ipfw source list so the safety
+  watchdog's firewall-originated control probe still exercises the bypass path.
+
 ## v1.7.2 - 2026-06-25
 
 ### Fixed

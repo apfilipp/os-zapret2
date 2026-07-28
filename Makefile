@@ -1,5 +1,5 @@
 PLUGIN_NAME=        zapret2
-PLUGIN_VERSION=     1.7.2
+PLUGIN_VERSION=     1.8.0
 PLUGIN_REVISION=    0
 PLUGIN_COMMENT=     DPI bypass using zapret2 (anti-censorship)
 PLUGIN_MAINTAINER=  mail@ugorur.com
