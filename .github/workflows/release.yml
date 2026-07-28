@@ -32,10 +32,43 @@ jobs:
           find pkg -type f -exec sh -n {} \;
           find scripts -name "*.sh" -exec sh -n {} \;
 
-  release:
-    name: Build & Release
+  build:
+    name: Build FreeBSD ${{ matrix.major }} pkg
     runs-on: ubuntu-latest
     needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One package per FreeBSD major: pkg refuses to install across
+          # majors (issue #5). 14.x covers OPNsense <= 26.4, 15.x covers 26.7+.
+          - release: "14.2"
+            major: "14"
+          - release: "15.1"
+            major: "15"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build .pkg inside FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "${{ matrix.release }}"
+          usesh: true
+          prepare: |
+            pkg install -y jq
+          run: |
+            sh scripts/build-pkg.sh
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-freebsd${{ matrix.major }}
+          path: dist/*.pkg
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs: build
     steps:
       - uses: actions/checkout@v4
 
@@ -45,8 +78,8 @@ jobs:
           TAG="${GITHUB_REF#refs/tags/v}"
           # The pkg filename uses the Makefile's PLUGIN_VERSION (which may
           # differ from the tag, e.g. tag v1.6.0 vs Makefile 1.6 → pkg name
-          # `os-zapret2-1.6.pkg`). Extract both so the release-notes URL
-          # matches the actual asset name.
+          # `os-zapret2-1.6-freebsd14.pkg`). Extract both so the release-notes
+          # URLs match the actual asset names.
           PKG=$(grep '^PLUGIN_VERSION=' Makefile | head -1 | sed 's/.*=\s*//')
           REV=$(grep '^PLUGIN_REVISION=' Makefile | head -1 | sed 's/.*=\s*//')
           if [ -n "$REV" ] && [ "$REV" != "0" ]; then
@@ -54,24 +87,18 @@ jobs:
           fi
           echo "tag_version=${TAG}" >> "$GITHUB_OUTPUT"
           echo "pkg_version=${PKG}" >> "$GITHUB_OUTPUT"
-          echo "Release tag: v${TAG} | pkg: os-zapret2-${PKG}.pkg"
+          echo "Release tag: v${TAG} | pkg: os-zapret2-${PKG}-freebsd{14,15}.pkg"
 
-      - name: Build .pkg inside FreeBSD VM
-        uses: vmactions/freebsd-vm@v1
+      - name: Download built packages
+        uses: actions/download-artifact@v4
         with:
-          release: "14.2"
-          usesh: true
-          prepare: |
-            pkg install -y jq
-          run: |
-            sh scripts/build-pkg.sh
+          pattern: pkg-freebsd*
+          merge-multiple: true
+          # Land in repo root so softprops/action-gh-release picks them up
+          path: .
 
-      - name: Stage built package for release upload
-        run: |
-          ls -lh dist/
-          # Move to repo root so softprops/action-gh-release picks it up
-          mv dist/*.pkg .
-          ls -lh *.pkg
+      - name: List packages for release upload
+        run: ls -lh *.pkg
 
       - name: Generate changelog
         id: changelog
@@ -85,10 +112,19 @@ jobs:
           cat > /tmp/changelog.md << 'HEADER'
           ## Installation
 
-          Install from SSH on the OPNsense firewall:
+          Two packages are attached — pick the one matching your FreeBSD core
+          (check with `uname -r`):
+
+          | Package | OPNsense | FreeBSD |
+          |---|---|---|
+          | `os-zapret2-${{ steps.version.outputs.pkg_version }}-freebsd14.pkg` | 26.1 – 26.4 | 14.x |
+          | `os-zapret2-${{ steps.version.outputs.pkg_version }}-freebsd15.pkg` | 26.7+ | 15.x |
+
+          Install from SSH on the OPNsense firewall (example for FreeBSD 14;
+          swap `freebsd14` for `freebsd15` on OPNsense 26.7+):
 
           ```sh
-          fetch -o /tmp/os-zapret2.pkg https://github.com/ugorur/os-zapret2/releases/download/v${{ steps.version.outputs.tag_version }}/os-zapret2-${{ steps.version.outputs.pkg_version }}.pkg
+          fetch -o /tmp/os-zapret2.pkg https://github.com/ugorur/os-zapret2/releases/download/v${{ steps.version.outputs.tag_version }}/os-zapret2-${{ steps.version.outputs.pkg_version }}-freebsd14.pkg
           pkg add /tmp/os-zapret2.pkg
 
           # Download and compile the dvtws2 binary
@@ -103,7 +139,7 @@ jobs:
           To uninstall: `pkg delete os-zapret2`
 
           ### Requirements
-          - OPNsense 26.1+ (FreeBSD 14.x)
+          - OPNsense 26.1+ (FreeBSD 14.x or 15.x — use the matching package above)
           - `luajit` package (declared as a pkg dependency, installed automatically)
           - `git` (required by setup.sh to fetch and compile zapret2 sources)
 

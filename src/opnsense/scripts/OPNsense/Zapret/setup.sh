@@ -65,10 +65,29 @@ fi
 
 # Refresh package catalogues. Do NOT use `-f` (force): a forced refresh churns
 # the entire catalog against every enabled repo and was implicated in breaking
-# system package state (issue #2). The default refresh fetches any missing or
-# stale catalog (including the just-enabled FreeBSD repo) and is a fast no-op
-# otherwise.
-pkg update -q
+# system package state (issue #2). When we just enabled the FreeBSD repo,
+# refresh ONLY that repo (`-r FreeBSD`) so an OPNsense-repo hiccup can't fail
+# the run; otherwise the default refresh fetches any missing or stale catalog
+# and is a fast no-op.
+if [ "${ENABLED_FREEBSD_REPO}" = "1" ]; then
+    if ! pkg update -r FreeBSD; then
+        # A "wrong OS version" here means pkg's ABI doesn't match the catalog
+        # fetched from pkg.FreeBSD.org — usually a stale ABI override in
+        # pkg.conf on the local system, not a plugin problem (issue #4).
+        # Surface the ABI so the mismatch is visible instead of dying with
+        # only the repo-restore message as the last output.
+        _abi=$(pkg config abi 2>/dev/null || echo "unknown")
+        echo "ERROR: could not refresh the FreeBSD pkg catalog." >&2
+        echo "  pkg ABI:  ${_abi}" >&2
+        echo "  kernel:   $(uname -r)" >&2
+        echo "If pkg reported 'wrong OS version' above, the pkg ABI does not match" >&2
+        echo "the FreeBSD release this system is running. Check /usr/local/etc/pkg.conf" >&2
+        echo "for an ABI override, fix or remove it, then re-run this script." >&2
+        exit 1
+    fi
+else
+    pkg update -q
+fi
 
 # Install a dependency, accepting any of several candidate package names. This
 # tolerates naming differences across OPNsense/FreeBSD versions: some releases

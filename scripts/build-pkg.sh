@@ -149,5 +149,14 @@ pkg-static create \
     -r "${STAGE}" \
     -o "${OUT}"
 
+# --- 6. Encode the FreeBSD major version in the filename ----------------------
+# pkg-static create stamps the build host's ABI (e.g. FreeBSD:14:amd64) into
+# the package, and pkg refuses to install across major versions (issue #5:
+# OPNsense 26.7+ runs a FreeBSD 15 core). Releases ship one package per major,
+# so the filename must say which one this is.
+OSMAJOR=$(pkg-static config abi | cut -d: -f2)
+mv "${OUT}/${PKG_NAME}-${FULL_VERSION}.pkg" \
+   "${OUT}/${PKG_NAME}-${FULL_VERSION}-freebsd${OSMAJOR}.pkg"
+
 echo "==> built:"
 ls -lh "${OUT}"/*.pkg

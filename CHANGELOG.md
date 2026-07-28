@@ -14,6 +14,21 @@ All notable changes to os-zapret2 are documented in this file.
   chain, so the LAN client's real address is visible to the divert rule. When
   the setting is used, `me` is appended to the ipfw source list so the safety
   watchdog's firewall-originated control probe still exercises the bypass path.
+- **FreeBSD 15 / OPNsense 26.7+ packages** (issue #5). pkg refuses to install
+  a package across FreeBSD major versions, and OPNsense 26.7 moved to a
+  FreeBSD 15 core, so the previously shipped FreeBSD:14 build failed there
+  with `wrong architecture: FreeBSD:14:amd64 instead of FreeBSD:15:amd64`.
+  CI and releases now build one package per major — `os-zapret2-<ver>-freebsd14.pkg`
+  (OPNsense 26.1–26.4) and `os-zapret2-<ver>-freebsd15.pkg` (OPNsense 26.7+).
+
+### Fixed
+
+- **`setup.sh` no longer dies silently when the FreeBSD catalog refresh
+  fails** (issue #4). The refresh now targets only the temporarily enabled
+  FreeBSD repo (`pkg update -r FreeBSD`), and on failure prints the local pkg
+  ABI and kernel version plus a hint to check `/usr/local/etc/pkg.conf` for a
+  stale ABI override — the usual cause of pkg rejecting the catalog with
+  "repository FreeBSD contains packages for wrong OS version".
 
 ## v1.7.2 - 2026-06-25
 
