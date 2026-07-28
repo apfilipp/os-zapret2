@@ -2,6 +2,27 @@
 
 All notable changes to os-zapret2 are documented in this file.
 
+## v1.8.2 - 2026-07-28
+
+### Fixed
+
+- **Source Networks silently disabled the bypass entirely** (regression in
+  v1.8.0, affects v1.8.0 and v1.8.1). The rule builder appended ipfw's `me`
+  keyword to the source address list (`from 10.0.30.0/24,me`), but `me` is a
+  standalone keyword that ipfw refuses inside a comma-separated list — it
+  rejects the rule with `hostname "me" unknown`. Because the install used
+  `ipfw -qf add`, the parse error was suppressed, so **no divert rules were
+  installed at all** while the service still reported "running". Anyone who
+  set Source Networks got no DPI bypass and no error.
+
+  The firewall's own traffic now gets a separate rule per port sharing the
+  same rule number (ipfw permits duplicate numbers, and `ipfw delete N` still
+  removes every rule with that number), and a failed rule install is reported
+  on stderr instead of swallowed. Verified live on OPNsense 26.1 / FreeBSD 14
+  with Source Networks set to a single LAN: client traffic diverts, other
+  networks pass through untouched, and the watchdog's firewall-originated
+  control probe still exercises the bypass path.
+
 ## v1.8.1 - 2026-07-28
 
 ### Fixed
