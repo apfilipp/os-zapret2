@@ -32,7 +32,7 @@ Releases ship as a real FreeBSD `.pkg`. Install with `pkg add` — OPNsense regi
 
 # Use -freebsd15 instead of -freebsd14 on OPNsense 26.7+ (uname -r says 15.x)
 fetch -o /tmp/os-zapret2.pkg \
-    https://github.com/ugorur/os-zapret2/releases/latest/download/os-zapret2-1.8.0-freebsd14.pkg
+    https://github.com/ugorur/os-zapret2/releases/latest/download/os-zapret2-1.8.1-freebsd14.pkg
 # (asset filename tracks PLUGIN_VERSION_PLUGIN_REVISION from Makefile — check the
 #  Releases page for the current version if the URL above 404s)
 

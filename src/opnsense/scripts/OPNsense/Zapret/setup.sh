@@ -11,24 +11,52 @@ set -e
 echo "=== zapret2 setup ==="
 
 # Install build + runtime dependencies if missing.
-# These come from FreeBSD's main pkg repo (not OPNsense's). OPNsense ships
-# with that repo *disabled* by default via an override at
-# /usr/local/etc/pkg/repos/FreeBSD.conf containing { enabled: no }. We enable
-# it here ONLY for the duration of the dependency install, and we ALWAYS
-# restore the original state on exit — success, failure, or interrupt — via a
-# trap. Leaving the FreeBSD repo enabled lets a later `pkg upgrade` pull
-# FreeBSD's upstream builds over OPNsense's own forks, which corrupts system
-# packages and dashboard widgets (issue #2).
+# These come from FreeBSD's main pkg repo (not OPNsense's). Older OPNsense
+# ships that repo *disabled* via an override at
+# /usr/local/etc/pkg/repos/FreeBSD.conf containing { enabled: no }; newer
+# OPNsense (26.7+) ships no FreeBSD repo definition at all. Either way we
+# make the repo available ONLY for the duration of the dependency install,
+# and we ALWAYS restore the original state on exit — success, failure, or
+# interrupt — via a trap. Leaving the FreeBSD repo enabled lets a later
+# `pkg upgrade` pull FreeBSD's upstream builds over OPNsense's own forks,
+# which corrupts system packages and dashboard widgets (issue #2).
 FREEBSD_REPO_OVERRIDE=/usr/local/etc/pkg/repos/FreeBSD.conf
 FREEBSD_REPO_BACKUP="${FREEBSD_REPO_OVERRIDE}.bak"
+FREEBSD_REPO_MARKER="Temporarily created by os-zapret2 setup.sh"
 ENABLED_FREEBSD_REPO=0
+CREATED_FREEBSD_REPO=0
 
 restore_freebsd_repo() {
-    if [ "${ENABLED_FREEBSD_REPO}" = "1" ] && [ -f "${FREEBSD_REPO_BACKUP}" ]; then
+    if [ "${CREATED_FREEBSD_REPO}" = "1" ]; then
+        rm -f "${FREEBSD_REPO_OVERRIDE}"
+        CREATED_FREEBSD_REPO=0
+        ENABLED_FREEBSD_REPO=0
+        echo "Removed temporary FreeBSD pkg repo definition."
+    elif [ "${ENABLED_FREEBSD_REPO}" = "1" ] && [ -f "${FREEBSD_REPO_BACKUP}" ]; then
         mv "${FREEBSD_REPO_BACKUP}" "${FREEBSD_REPO_OVERRIDE}"
         ENABLED_FREEBSD_REPO=0
         echo "Restored FreeBSD pkg repo to its original (disabled) state."
     fi
+}
+
+# Write a COMPLETE FreeBSD repo definition (the stock /etc/pkg/FreeBSD.conf
+# contents), not just `FreeBSD: { enabled: yes }`. Newer OPNsense (26.7+)
+# no longer ships the base definition in /etc/pkg/FreeBSD.conf, so a bare
+# enable merges onto nothing — a repo with no URL — and pkg reports
+# "No repositories are enabled." (issue #4). Only the base FreeBSD repo is
+# defined here; FreeBSD-kmods stays off — no kernel module is needed, and
+# pulling kmods risks clobbering OPNsense's own.
+write_freebsd_repo_conf() {
+    cat > "${FREEBSD_REPO_OVERRIDE}" <<EOF
+# ${FREEBSD_REPO_MARKER}; safe to delete.
+FreeBSD: {
+  url: "pkg+https://pkg.FreeBSD.org/\${ABI}/latest",
+  mirror_type: "srv",
+  signature_type: "fingerprints",
+  fingerprints: "/usr/share/keys/pkg",
+  enabled: yes
+}
+EOF
 }
 
 restore_then_exit() {
@@ -52,15 +80,26 @@ if [ -f "${FREEBSD_REPO_BACKUP}" ]; then
     restore_freebsd_repo
 fi
 
-if [ -f "${FREEBSD_REPO_OVERRIDE}" ] && grep -q 'enabled: no' "${FREEBSD_REPO_OVERRIDE}"; then
+# Recover from runs that CREATED a temporary repo definition (no backup file)
+# and died hard before removing it — identified by our marker comment.
+if [ -f "${FREEBSD_REPO_OVERRIDE}" ] && grep -q "${FREEBSD_REPO_MARKER}" "${FREEBSD_REPO_OVERRIDE}"; then
+    echo "Found leftover temporary FreeBSD repo definition from an earlier run; removing it."
+    rm -f "${FREEBSD_REPO_OVERRIDE}"
+fi
+
+if [ ! -f "${FREEBSD_REPO_OVERRIDE}" ]; then
+    # Newer OPNsense ships no FreeBSD repo definition at all (neither the base
+    # /etc/pkg/FreeBSD.conf nor a disabled override) — create a temporary one.
+    echo "Temporarily adding FreeBSD pkg repo to fetch luajit/jq/git/pkgconf..."
+    mkdir -p "$(dirname "${FREEBSD_REPO_OVERRIDE}")"
+    CREATED_FREEBSD_REPO=1
+    ENABLED_FREEBSD_REPO=1
+    write_freebsd_repo_conf
+elif grep -q 'enabled: no' "${FREEBSD_REPO_OVERRIDE}"; then
     echo "Temporarily enabling FreeBSD pkg repo to fetch luajit/jq/git/pkgconf..."
     cp "${FREEBSD_REPO_OVERRIDE}" "${FREEBSD_REPO_BACKUP}"
     ENABLED_FREEBSD_REPO=1
-    # Enable ONLY the base FreeBSD repo. Do NOT enable FreeBSD-kmods — no kernel
-    # module is needed here, and pulling kmods risks clobbering OPNsense's own.
-    cat > "${FREEBSD_REPO_OVERRIDE}" <<'EOF'
-FreeBSD: { enabled: yes }
-EOF
+    write_freebsd_repo_conf
 fi
 
 # Refresh package catalogues. Do NOT use `-f` (force): a forced refresh churns

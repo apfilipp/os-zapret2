@@ -2,6 +2,20 @@
 
 All notable changes to os-zapret2 are documented in this file.
 
+## v1.8.1 - 2026-07-28
+
+### Fixed
+
+- **`setup.sh` works on OPNsense 26.7+/27, which ships no FreeBSD repo
+  definition at all** (issue #4, follow-up). The script used to write a bare
+  `FreeBSD: { enabled: yes }` override and rely on the base definition in
+  `/etc/pkg/FreeBSD.conf` for the URL; on newer OPNsense that base file is
+  gone, so the merged repo had no URL and pkg failed with "No repositories
+  are enabled." The override now carries the complete stock repo definition
+  (URL, srv mirror, signature fingerprints). When no override file exists,
+  a temporary one is created and deleted again on exit — a marker comment
+  lets a later run clean up leftovers from a crashed run.
+
 ## v1.8.0 - 2026-07-28
 
 ### Added
