@@ -244,13 +244,20 @@ start_service() {
     # divert to traffic FROM those networks. This works because ipfw is
     # deliberately hooked AHEAD of pf on the outbound chain (see
     # configure_ipfw_reinject) — the packet still carries the LAN client's
-    # pre-NAT source address when the rule is evaluated. `me` is appended so
-    # firewall-originated traffic (the watchdog's control probe) keeps going
-    # through the bypass and the safety watchdog stays meaningful. Empty
-    # SOURCE_NETS keeps the historical match-everything behavior.
+    # pre-NAT source address when the rule is evaluated. Empty SOURCE_NETS
+    # keeps the historical match-everything behavior.
+    #
+    # When SOURCE_NETS is set we install a SECOND rule per port matching
+    # `from me`, so the firewall's own traffic (the safety watchdog's control
+    # probe) still goes through the bypass. It has to be a separate rule:
+    # ipfw's `me` is a standalone keyword and is NOT accepted inside a
+    # comma-separated address list — `from 10.0.30.0/24,me` fails to parse
+    # with `hostname "me" unknown` and the whole rule is silently skipped.
+    # Both rules share one rule number; ipfw allows duplicates and evaluates
+    # them in insertion order, and `ipfw delete N` removes both.
     local src_spec="any"
     if [ -n "${SOURCE_NETS}" ]; then
-        src_spec="${SOURCE_NETS},me"
+        src_spec="${SOURCE_NETS}"
     fi
     remove_ipfw_rules
     local rulenum=${RULE_BASE}
@@ -259,7 +266,12 @@ start_service() {
     for port in ${PORTS}; do
         # src_spec is quoted: IFS is "," here and the address list must
         # reach ipfw as a single token.
-        /sbin/ipfw -qf add ${rulenum} divert ${DIVERT_PORT} tcp from "${src_spec}" to any ${port} out not diverted not sockarg xmit ${wan_dev}
+        if ! /sbin/ipfw -f add ${rulenum} divert ${DIVERT_PORT} tcp from "${src_spec}" to any ${port} out not diverted not sockarg xmit ${wan_dev} >/dev/null 2>&1; then
+            echo "failed to install ipfw divert rule for port ${port} from '${src_spec}' — check Source Networks syntax" >&2
+        fi
+        if [ -n "${SOURCE_NETS}" ]; then
+            /sbin/ipfw -qf add ${rulenum} divert ${DIVERT_PORT} tcp from me to any ${port} out not diverted not sockarg xmit ${wan_dev}
+        fi
         rulenum=$((rulenum + 1))
     done
     IFS="${IFS_SAVED}"
