@@ -10,9 +10,14 @@ if [ -x /usr/local/etc/rc.d/configd ]; then
     /usr/local/etc/rc.d/configd restart >/dev/null 2>&1 || true
 fi
 
-# Regenerate menu / ACL caches so the new plugin pages are visible
-if [ -x /usr/local/sbin/pluginctl ]; then
-    /usr/local/sbin/pluginctl -c webgui.lighttpd_reload >/dev/null 2>&1 || true
+# Run MVC model migrations using the standard OPNsense plugin lifecycle.
+if [ -f /usr/local/opnsense/mvc/script/run_migrations.php ]; then
+    /usr/local/opnsense/mvc/script/run_migrations.php OPNsense/Zapret
+fi
+
+# Reload plugin configuration and flush user-facing caches.
+if [ -f /usr/local/etc/rc.configure_plugins ]; then
+    /usr/local/etc/rc.configure_plugins POST_INSTALL
 fi
 
 # Render the initial config template (no-op if settings haven't been saved yet)
