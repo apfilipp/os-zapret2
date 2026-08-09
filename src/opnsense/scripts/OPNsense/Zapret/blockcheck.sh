@@ -259,17 +259,46 @@ if [ -f /usr/local/opnsense/version/core ]; then
         exit 0
     fi
 
-    BLOCKCHECK_TMP="/tmp/blockcheck2-opnsense.$$"
+    PF_DISABLE_COUNT=$(grep -cF 'pf_is_avail && pfctl -qd' "${BLOCKCHECK}" 2>/dev/null || true)
+    DVTWS_START_COUNT=$(grep -cF '"$DVTWS2" --port=$IPFW_DIVERT_PORT ' "${BLOCKCHECK}" 2>/dev/null || true)
+    OUTBOUND_RULE_COUNT=$(grep -cF 'IPFW_ADD divert $IPFW_DIVERT_PORT $1 from me to $ip $2 proto ip${IPV} out not diverted' "${BLOCKCHECK}" 2>/dev/null || true)
+    INBOUND_RULE_COUNT=$(grep -cF 'IPFW_ADD divert $IPFW_DIVERT_PORT tcp from $ip $1 to me proto ip${IPV} tcpflags syn,ack in not diverted' "${BLOCKCHECK}" 2>/dev/null || true)
+
+    if [ "${PF_DISABLE_COUNT}" -ne 1 ] ||
+       [ "${DVTWS_START_COUNT}" -ne 1 ] ||
+       [ "${OUTBOUND_RULE_COUNT}" -ne 1 ] ||
+       [ "${INBOUND_RULE_COUNT}" -ne 1 ]; then
+        emit_error "unsupported blockcheck2.sh format (patch targets: pf=${PF_DISABLE_COUNT}, dvtws=${DVTWS_START_COUNT}, outbound=${OUTBOUND_RULE_COUNT}, inbound=${INBOUND_RULE_COUNT})"
+        exit 0
+    fi
+
+    BLOCKCHECK_TMP=$(/usr/bin/mktemp -t blockcheck2-opnsense.XXXXXX) || {
+        emit_error "could not create temporary OPNsense blockcheck wrapper"
+        exit 0
+    }
 
     sed \
         -e 's/pf_is_avail && pfctl -qd/: # OPNsense: keep pf enabled/' \
         -e 's|"$DVTWS2" --port=$IPFW_DIVERT_PORT |"$DVTWS2" --port=$IPFW_DIVERT_PORT --sockarg=0x200 --user=nobody |' \
-        -e 's|out not diverted$|out not diverted not sockarg xmit $IFACE_WAN|' \
+        -e 's|IPFW_ADD divert $IPFW_DIVERT_PORT $1 from me to $ip $2 proto ip${IPV} out not diverted|IPFW_ADD divert $IPFW_DIVERT_PORT $1 from me to $ip $2 proto ip${IPV} out not diverted not sockarg xmit $IFACE_WAN|' \
         -e 's|IPFW_ADD divert $IPFW_DIVERT_PORT tcp from $ip $1 to me proto ip${IPV} tcpflags syn,ack in not diverted|: # OPNsense: do not divert inbound SYN+ACK|' \
         "${BLOCKCHECK}" > "${BLOCKCHECK_TMP}" || {
         emit_error "could not prepare OPNsense blockcheck wrapper"
         exit 0
     }
+
+    PF_PATCH_COUNT=$(grep -cF ': # OPNsense: keep pf enabled' "${BLOCKCHECK_TMP}" 2>/dev/null || true)
+    DVTWS_PATCH_COUNT=$(grep -cF '"$DVTWS2" --port=$IPFW_DIVERT_PORT --sockarg=0x200 --user=nobody ' "${BLOCKCHECK_TMP}" 2>/dev/null || true)
+    OUTBOUND_PATCH_COUNT=$(grep -cF 'out not diverted not sockarg xmit $IFACE_WAN' "${BLOCKCHECK_TMP}" 2>/dev/null || true)
+    INBOUND_PATCH_COUNT=$(grep -cF ': # OPNsense: do not divert inbound SYN+ACK' "${BLOCKCHECK_TMP}" 2>/dev/null || true)
+
+    if [ "${PF_PATCH_COUNT}" -ne 1 ] ||
+       [ "${DVTWS_PATCH_COUNT}" -ne 1 ] ||
+       [ "${OUTBOUND_PATCH_COUNT}" -ne 1 ] ||
+       [ "${INBOUND_PATCH_COUNT}" -ne 1 ]; then
+        emit_error "could not verify patched blockcheck2.sh"
+        exit 0
+    fi
 
     chmod 700 "${BLOCKCHECK_TMP}"
     BLOCKCHECK_RUN="${BLOCKCHECK_TMP}"
