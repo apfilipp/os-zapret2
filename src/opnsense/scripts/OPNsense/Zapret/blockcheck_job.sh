@@ -7,7 +7,10 @@ PIDFILE="/var/run/zapret-blockcheck.pid"
 RESULT="/var/run/zapret-blockcheck.result"
 META="/var/run/zapret-blockcheck.meta"
 STOPFILE="/var/run/zapret-blockcheck.stop"
+START_LOCK="/var/run/zapret-blockcheck.start.lock"
 LOG_DIR="/var/log/zapret"
+
+umask 077
 
 ACTION="$1"
 DOMAIN="$2"
@@ -25,12 +28,76 @@ is_running()
 {
     if [ -f "${PIDFILE}" ]; then
         pid=$(cat "${PIDFILE}" 2>/dev/null)
-        if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
-            return 0
-        fi
+        case "${pid}" in
+            ''|*[!0-9]*)
+                ;;
+            *)
+                if kill -0 "${pid}" 2>/dev/null; then
+                    pid_command=$(ps -o command= -p "${pid}" 2>/dev/null)
+                    case "${pid_command}" in
+                        *"${BLOCKCHECK}"*)
+                            return 0
+                            ;;
+                    esac
+
+                    # daemon(8) writes its child PID just before exec(2).  A
+                    # startup poll must not unlink that fresh pidfile while
+                    # the child command still briefly appears as daemon.
+                    if [ "${1:-}" = "preserve-live-pidfile" ]; then
+                        return 1
+                    fi
+                fi
+                ;;
+        esac
         rm -f "${PIDFILE}"
     fi
     return 1
+}
+
+release_start_lock()
+{
+    lock_owner=$(cat "${START_LOCK}/pid" 2>/dev/null)
+    if [ "${lock_owner}" = "$$" ]; then
+        rm -f "${START_LOCK}/pid" "${META}.$$"
+        rmdir "${START_LOCK}" 2>/dev/null
+    fi
+}
+
+acquire_start_lock()
+{
+    if ! mkdir "${START_LOCK}" 2>/dev/null; then
+        # A second caller can observe the directory just before the first one
+        # writes its owner PID. Give that tiny window time to close before
+        # deciding whether the lock is stale.
+        [ -f "${START_LOCK}/pid" ] || sleep 1
+        lock_owner=$(cat "${START_LOCK}/pid" 2>/dev/null)
+
+        case "${lock_owner}" in
+            ''|*[!0-9]*)
+                ;;
+            *)
+                if kill -0 "${lock_owner}" 2>/dev/null; then
+                    lock_command=$(ps -o command= -p "${lock_owner}" 2>/dev/null)
+                    case "${lock_command}" in
+                        *blockcheck_job.sh*)
+                            return 1
+                            ;;
+                    esac
+                fi
+                ;;
+        esac
+
+        rm -f "${START_LOCK}/pid"
+        rmdir "${START_LOCK}" 2>/dev/null || return 1
+        mkdir "${START_LOCK}" 2>/dev/null || return 1
+    fi
+
+    if ! printf '%s\n' "$$" > "${START_LOCK}/pid"; then
+        rmdir "${START_LOCK}" 2>/dev/null
+        return 1
+    fi
+
+    return 0
 }
 
 case "${ACTION}" in
@@ -45,23 +112,56 @@ case "${ACTION}" in
             exit 0
         fi
 
+        if ! acquire_start_lock; then
+            echo '{"status":"error","message":"blockcheck start is already in progress"}'
+            exit 0
+        fi
+        trap release_start_lock EXIT
+        trap 'exit 1' INT TERM HUP
+
         if is_running; then
             echo '{"status":"error","message":"blockcheck is already running"}'
             exit 0
         fi
 
-		rm -f "${RESULT}" "${META}" "${STOPFILE}"
+        rm -f "${PIDFILE}" "${RESULT}" "${META}" "${STOPFILE}"
         started=$(date -u +%s)
 
-        {
+        if ! {
             echo "${DOMAIN}"
             echo "${started}"
-        } > "${META}"
+        } > "${META}.$$"; then
+            rm -f "${META}.$$"
+            echo '{"status":"error","message":"could not create blockcheck metadata"}'
+            exit 0
+        fi
 
-        /usr/sbin/daemon \
+        if ! mv -f "${META}.$$" "${META}"; then
+            rm -f "${META}.$$"
+            echo '{"status":"error","message":"could not publish blockcheck metadata"}'
+            exit 0
+        fi
+
+        if ! /usr/sbin/daemon \
             -p "${PIDFILE}" \
             -o "${RESULT}" \
-            "${BLOCKCHECK}" "${DOMAIN}" "${MODE}"
+            "${BLOCKCHECK}" "${DOMAIN}" "${MODE}"; then
+            rm -f "${PIDFILE}" "${META}"
+            echo '{"status":"error","message":"could not launch blockcheck"}'
+            exit 0
+        fi
+
+        launch_wait=0
+        while [ "${launch_wait}" -lt 20 ] && ! is_running preserve-live-pidfile; do
+            sleep 0.1
+            launch_wait=$((launch_wait + 1))
+        done
+
+        if ! is_running preserve-live-pidfile; then
+            rm -f "${PIDFILE}" "${META}"
+            echo '{"status":"error","message":"blockcheck process exited during startup"}'
+            exit 0
+        fi
 
         /usr/local/bin/jq -nc \
             --arg domain "${DOMAIN}" \
