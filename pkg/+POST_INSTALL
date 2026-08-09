@@ -1,14 +1,67 @@
 #!/bin/sh
 
 # Post-install hook for os-zapret2.
-# Runs after pkg has laid down the files. Restarts configd so it picks up
-# the new actions_zapret.conf, and clears the GUI ACL/menu cache so the
-# new Services > Zapret menu entry shows up without a manual webgui reload.
+# Runs after pkg has laid down the files. Reloads configd actions and clears
+# the GUI ACL/menu cache so the new Services > Zapret menu entry shows up
+# without a manual webgui reload.
 
-# Reload configd to pick up new action definitions and plugins.inc.d hooks
-if [ -x /usr/local/etc/rc.d/configd ]; then
-    /usr/local/etc/rc.d/configd restart >/dev/null 2>&1 || true
-fi
+# configd consists of a persistent supervisor and a worker that handles the
+# socket and loads actions.d. Restarting the whole service synchronously from
+# a pkg hook can leave configd stopped when the package transaction tears down
+# its descendants. Terminating only the existing worker makes the pre-existing
+# supervisor reload it safely with the newly installed action definitions.
+reload_configd_actions()
+{
+    zapret_configd_pidfile=/var/run/configd.pid
+    zapret_configd_socket=/var/run/configd.socket
+
+    # Do not start a previously stopped system service from a package hook.
+    # Its actions will be loaded the next time OPNsense starts configd.
+    if [ ! -r "${zapret_configd_pidfile}" ]; then
+        echo "NOTICE: configd is not running; live Zapret action reload skipped" >&2
+        return 0
+    fi
+
+    zapret_configd_supervisor=$(cat "${zapret_configd_pidfile}" 2>/dev/null)
+    case "${zapret_configd_supervisor}" in
+        ''|*[!0-9]*)
+            echo "WARNING: invalid configd pidfile; live Zapret action reload skipped" >&2
+            return 1
+            ;;
+    esac
+
+    if ! kill -0 "${zapret_configd_supervisor}" 2>/dev/null ||
+        ! /bin/ps -p "${zapret_configd_supervisor}" -o command= 2>/dev/null |
+            /usr/bin/grep -Fq '/usr/local/opnsense/service/configd.py'; then
+        echo "WARNING: configd supervisor is unavailable; live Zapret action reload skipped" >&2
+        return 1
+    fi
+
+    zapret_configd_worker=$(/usr/bin/pgrep -P "${zapret_configd_supervisor}" | /usr/bin/head -1)
+    if [ -z "${zapret_configd_worker}" ] || ! kill -TERM "${zapret_configd_worker}" 2>/dev/null; then
+        echo "WARNING: configd worker could not be reloaded" >&2
+        return 1
+    fi
+
+    zapret_configd_wait=0
+    while [ "${zapret_configd_wait}" -lt 50 ]; do
+        zapret_configd_new_worker=$(/usr/bin/pgrep -P "${zapret_configd_supervisor}" |
+            /usr/bin/head -1)
+        if [ -n "${zapret_configd_new_worker}" ] &&
+            [ "${zapret_configd_new_worker}" != "${zapret_configd_worker}" ] &&
+            [ -S "${zapret_configd_socket}" ] &&
+            /usr/local/sbin/configctl -q configd lookup 'zapret status' >/dev/null 2>&1; then
+            return 0
+        fi
+        /bin/sleep 0.1
+        zapret_configd_wait=$((zapret_configd_wait + 1))
+    done
+
+    echo "WARNING: timed out waiting for configd worker reload" >&2
+    return 1
+}
+
+reload_configd_actions || true
 
 # Run MVC model migrations using the standard OPNsense plugin lifecycle.
 if [ -f /usr/local/opnsense/mvc/script/run_migrations.php ]; then
