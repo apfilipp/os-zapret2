@@ -17,15 +17,6 @@ ZAPRET_DIR="/usr/local/etc/zapret2"
 BLOCKCHECK="${ZAPRET_DIR}/blockcheck2.sh"
 CONFIG="${ZAPRET_DIR}/zapret.conf"
 
-# How long to let blockcheck run before aborting (seconds). Heavily
-# blocked domains can take 15+ min for a full HTTP+TLS12+TLS13 sweep
-# (each curl test that fails sits at curl's 5-10s timeout, and there
-# are 50+ strategies per protocol). Cap at 25 min by default; user can
-# override via env (BLOCKCHECK_TIMEOUT=1800 in front of the call).
-TIMEOUT="${BLOCKCHECK_TIMEOUT:-1500}"
-
-DOMAIN="$1"
-
 MODE="${2:-all}"
 
 case "${MODE}" in
@@ -281,9 +272,35 @@ REPEATS=1
 PARALLEL=0
 SCANLEVEL=standard
 
+# Prefer the private HTTP/3-capable curl shipped with the plugin.
+# Fall back to the OPNsense system curl if it is unavailable.
+CURL_H3="/usr/local/libexec/zapret2/curl-h3/bin/curl"
+
+if [ -x "${CURL_H3}" ]; then
+    CURL="${CURL_H3}"
+elif [ -x /usr/local/bin/curl ]; then
+    CURL="/usr/local/bin/curl"
+else
+    CURL="curl"
+fi
+
+# curl-impersonate does not have an OPNsense CA path compiled in.
+# Reuse the firewall's own current CA bundle instead of shipping one.
+if [ -f /usr/local/share/certs/ca-root-nss.crt ]; then
+    CURL_CA_BUNDLE="/usr/local/share/certs/ca-root-nss.crt"
+elif [ -f /etc/ssl/cert.pem ]; then
+    CURL_CA_BUNDLE="/etc/ssl/cert.pem"
+else
+    CURL_CA_BUNDLE=""
+fi
+
 export ZAPRET_BASE BATCH IFACE_WAN DOMAINS DOMAINS_DEFAULT IPVS
 export ENABLE_HTTP ENABLE_HTTPS_TLS12 ENABLE_HTTPS_TLS13 ENABLE_HTTP3
-export REPEATS PARALLEL SCANLEVEL
+export REPEATS PARALLEL SCANLEVEL CURL
+
+if [ -n "${CURL_CA_BUNDLE}" ]; then
+    export CURL_CA_BUNDLE
+fi
 
 /usr/bin/timeout ${TIMEOUT} /bin/sh "${BLOCKCHECK_RUN}" >"${LOG}" 2>&1
 EXIT=$?

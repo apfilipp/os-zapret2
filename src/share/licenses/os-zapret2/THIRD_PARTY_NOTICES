@@ -1,0 +1,14 @@
+os-zapret2 bundled HTTP/3 client - third-party software notices
+
+The HTTP/3 client bundled with os-zapret2 is built from:
+
+  lexiforest/curl-impersonate 2.0.0
+
+The curl-impersonate project is distributed under the MIT License.
+
+The bundled executable also incorporates third-party components used by
+curl-impersonate, including curl, BoringSSL, nghttp2, ngtcp2, nghttp3,
+zlib, Brotli, and Zstandard.
+
+Their respective license notices are distributed alongside the bundled
+HTTP/3 client where required.
