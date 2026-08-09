@@ -32,6 +32,18 @@ function zapret_enabled()
     return (string)$model->general->enabled === '1';
 }
 
+function zapret_configure()
+{
+    return [
+        'newwanip' => ['zapret_configure_newwanip'],
+    ];
+}
+
+function zapret_configure_newwanip($verbose = false)
+{
+    (new \OPNsense\Core\Backend())->configdRun('zapret repair');
+}
+
 function zapret_services()
 {
     $services = [];

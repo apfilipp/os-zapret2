@@ -139,6 +139,39 @@ configure_ipfw_reinject() {
     /sbin/pfctl -e >/dev/null 2>&1
 }
 
+install_ipfw_rules() {
+    local wan_dev="$1"
+    local src_spec="any"
+
+    if [ -n "${SOURCE_NETS}" ]; then
+        src_spec="${SOURCE_NETS}"
+    fi
+
+    remove_ipfw_rules
+
+    local rulenum=${RULE_BASE}
+    local IFS_SAVED="${IFS}"
+    IFS=","
+
+    for port in ${PORTS}; do
+        if ! /sbin/ipfw -f add ${rulenum} divert ${DIVERT_PORT} tcp \
+            from "${src_spec}" to any ${port} \
+            out not diverted not sockarg xmit ${wan_dev} >/dev/null 2>&1; then
+            echo "failed to install ipfw divert rule for port ${port} from '${src_spec}'" >&2
+        fi
+
+        if [ -n "${SOURCE_NETS}" ]; then
+            /sbin/ipfw -qf add ${rulenum} divert ${DIVERT_PORT} tcp \
+                from me to any ${port} \
+                out not diverted not sockarg xmit ${wan_dev}
+        fi
+
+        rulenum=$((rulenum + 1))
+    done
+
+    IFS="${IFS_SAVED}"
+}
+
 start_service() {
     load_config
 
@@ -222,59 +255,7 @@ start_service() {
         fi
     fi
 
-    # Install ipfw divert rules — one per port. Exact form from upstream
-    # zapret's pfSense script (init.d/pfsense/zapret.sh:22):
-    #
-    #   divert 989 tcp from any to any 80,443 out not diverted not sockarg
-    #
-    # Loop-guard: `not diverted not sockarg` — BOTH conditions combined.
-    # - `not diverted` checks the M_IPFW_DIVERT mbuf flag (IPv4).
-    # - `not sockarg` checks SO_USER_COOKIE (IPv4 only; FreeBSD kernel
-    #   ignores sockarg on IPv6, which is why upstream uses a second
-    #   divert socket for IPv6 and falls back to `diverted`-only.)
-    #
-    # Either of these flags alone was insufficient in our virtio tests
-    # (million-packet loops). Combined with the `pfctl -d ; pfctl -e`
-    # bounce in configure_ipfw_reinject above, traffic flows correctly.
-    #
-    # `xmit $wan_dev` scopes to outbound on the WAN device so we only
-    # intercept traffic actually leaving the firewall.
-    #
-    # SOURCE_NETS (optional, comma-separated IPv4 hosts/CIDRs) narrows the
-    # divert to traffic FROM those networks. This works because ipfw is
-    # deliberately hooked AHEAD of pf on the outbound chain (see
-    # configure_ipfw_reinject) — the packet still carries the LAN client's
-    # pre-NAT source address when the rule is evaluated. Empty SOURCE_NETS
-    # keeps the historical match-everything behavior.
-    #
-    # When SOURCE_NETS is set we install a SECOND rule per port matching
-    # `from me`, so the firewall's own traffic (the safety watchdog's control
-    # probe) still goes through the bypass. It has to be a separate rule:
-    # ipfw's `me` is a standalone keyword and is NOT accepted inside a
-    # comma-separated address list — `from 10.0.30.0/24,me` fails to parse
-    # with `hostname "me" unknown` and the whole rule is silently skipped.
-    # Both rules share one rule number; ipfw allows duplicates and evaluates
-    # them in insertion order, and `ipfw delete N` removes both.
-    local src_spec="any"
-    if [ -n "${SOURCE_NETS}" ]; then
-        src_spec="${SOURCE_NETS}"
-    fi
-    remove_ipfw_rules
-    local rulenum=${RULE_BASE}
-    local IFS_SAVED="${IFS}"
-    IFS=","
-    for port in ${PORTS}; do
-        # src_spec is quoted: IFS is "," here and the address list must
-        # reach ipfw as a single token.
-        if ! /sbin/ipfw -f add ${rulenum} divert ${DIVERT_PORT} tcp from "${src_spec}" to any ${port} out not diverted not sockarg xmit ${wan_dev} >/dev/null 2>&1; then
-            echo "failed to install ipfw divert rule for port ${port} from '${src_spec}' — check Source Networks syntax" >&2
-        fi
-        if [ -n "${SOURCE_NETS}" ]; then
-            /sbin/ipfw -qf add ${rulenum} divert ${DIVERT_PORT} tcp from me to any ${port} out not diverted not sockarg xmit ${wan_dev}
-        fi
-        rulenum=$((rulenum + 1))
-    done
-    IFS="${IFS_SAVED}"
+	install_ipfw_rules "${wan_dev}"
 
     # Start the safety watchdog under daemon(8) too. It probes a control URL
     # every minute and stops the service if 3 consecutive checks fail —
@@ -341,6 +322,39 @@ status_service() {
     fi
 }
 
+repair_service() {
+    load_config
+
+    if [ "${ZAPRET_ENABLED}" != "1" ]; then
+        echo "zapret repair skipped (disabled in settings)"
+        exit 0
+    fi
+
+    # Repair is intended for events such as WAN DHCP/PPPoE renew where
+    # OPNsense may disable or rebuild ipfw while dvtws2 itself keeps running.
+    # Do not restart the daemon here.
+    if [ ! -f "${PIDFILE}" ] || ! kill -0 "$(cat ${PIDFILE})" 2>/dev/null; then
+        echo "zapret repair skipped (dvtws2 is not running)"
+        exit 0
+    fi
+
+    kldstat -q -m ipdivert || kldload ipdivert
+    kldstat -q -m ipfw     || kldload ipfw
+
+    ensure_ipfw_default_accept
+    configure_ipfw_reinject
+
+    local wan_dev=$(resolve_interface "${WAN_IF}")
+    if [ -z "${wan_dev}" ]; then
+        echo "could not resolve WAN interface '${WAN_IF}' to a kernel device" >&2
+        exit 1
+    fi
+
+    install_ipfw_rules "${wan_dev}"
+
+    echo "zapret firewall state repaired on ${wan_dev}"
+}
+
 reconfigure_service() {
     /usr/local/sbin/configctl template reload OPNsense/Zapret
 
@@ -356,13 +370,12 @@ reconfigure_service() {
 }
 
 case "$1" in
-    start)       start_service ;;
-    stop)        stop_service ;;
-    restart)     stop_service > /dev/null 2>&1; sleep 1; start_service ;;
-    status)      status_service ;;
-    reconfigure) reconfigure_service ;;
-    *)
-        echo "usage: zapret_service.sh {start|stop|restart|status|reconfigure}" >&2
-        exit 1
-        ;;
+start)       start_service ;;
+stop)        stop_service ;;
+restart)     stop_service > /dev/null 2>&1; sleep 1; start_service ;;
+status)      status_service ;;
+repair)      repair_service ;;
+reconfigure) reconfigure_service ;;
+*)
+    echo "usage: zapret_service.sh {start|stop|restart|status|repair|reconfigure}" >&2
 esac
