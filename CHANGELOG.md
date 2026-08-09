@@ -4,8 +4,15 @@ All notable changes to os-zapret2 are documented in this file.
 
 ## Unreleased
 
+## v1.8.3 - 2026-08-10
+
 ### Added
 
+- **Asynchronous Blockcheck diagnostics** with live progress, persistent logs,
+  explicit stop support, and single-job locking. The configured Zapret service
+  is suspended only for the scan and restored afterward.
+- **HTTP/3 / QUIC strategy discovery** backed by a bundled private HTTP/3 curl,
+  so QUIC checks do not depend on the capabilities of OPNsense's system curl.
 - **Per-strategy HTTPS stability test** in Diagnostics. An administrator can
   paste dvtws2 arguments (or leave the field empty to test direct connectivity
   without bypass), resolve every IPv4 address for a domain, and run ten requests
@@ -14,6 +21,26 @@ All notable changes to os-zapret2 are documented in this file.
   writes a persistent log under `/var/log/zapret`, and leaves the
   configured service and its firewall rules unchanged. The UI explicitly
   identifies this as a firewall-originated test rather than a LAN-path test.
+
+### Fixed
+
+- **Blockcheck lifecycle and firewall safety.** Concurrent starts are rejected,
+  elapsed time freezes after stop, required upstream patch targets are
+  validated, firewall setup fails closed, and domain/timeout guards are
+  preserved when refreshing the bundled upstream script.
+- **Blockcheck result validation.** Only confirmed packet-test successes are
+  accepted, malformed results are rejected, and winning strategies are parsed
+  without treating headings or unrelated output as usable configurations.
+- **Service restoration.** A running Zapret instance is restored after a scan,
+  and its firewall state is repaired after WAN address renewal.
+- **Package installation no longer leaves `configd` stopped.** The post-install
+  hook reloads the existing configd worker under its persistent supervisor
+  instead of restarting the whole daemon inside the pkg transaction. Plugin
+  configuration is also refreshed after uninstall.
+- **Diagnostics failures are visible.** Domain checks preserve failure output
+  and now show an explicit backend/configd error instead of clearing the result
+  field when no response is returned.
+- **QUIC hostlist handling** now follows upstream zapret semantics.
 
 ## v1.8.2 - 2026-07-28
 
