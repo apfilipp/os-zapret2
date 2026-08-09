@@ -4,6 +4,7 @@
 
 BLOCKCHECK="/usr/local/opnsense/scripts/OPNsense/Zapret/blockcheck.sh"
 WINNER_PARSER="/usr/local/opnsense/scripts/OPNsense/Zapret/blockcheck_winners.awk"
+JQ="/usr/local/bin/jq"
 PIDFILE="/var/run/zapret-blockcheck.pid"
 RESULT="/var/run/zapret-blockcheck.result"
 META="/var/run/zapret-blockcheck.meta"
@@ -22,6 +23,15 @@ case "${MODE}" in
         ;;
     *)
         MODE="all"
+        ;;
+esac
+
+case "${ACTION}" in
+    start|stop|status)
+        if [ ! -x "${JQ}" ]; then
+            echo '{"status":"error","message":"jq is not installed — run setup.sh first"}'
+            exit 0
+        fi
         ;;
 esac
 
@@ -179,7 +189,7 @@ case "${ACTION}" in
             exit 0
         fi
 
-        /usr/local/bin/jq -nc \
+        "${JQ}" -nc \
             --arg domain "${DOMAIN}" \
             --argjson started "${started}" \
             '{status:"ok", state:"started", domain:$domain, started_epoch:$started}'
@@ -200,7 +210,7 @@ case "${ACTION}" in
         fi
 
         if ! is_running; then
-            /usr/local/bin/jq -nc \
+            "${JQ}" -nc \
                 --arg domain "${domain}" \
                 '{status:"ok", state:"stopped", domain:$domain}'
             exit 0
@@ -213,7 +223,7 @@ case "${ACTION}" in
                 exit 0
             fi
 
-            /usr/local/bin/jq -nc \
+            "${JQ}" -nc \
                 --arg domain "${domain}" \
                 '{status:"ok", state:"stopping", domain:$domain}'
             exit 0
@@ -248,7 +258,7 @@ case "${ACTION}" in
             exit 0
         fi
 
-        /usr/local/bin/jq -nc \
+        "${JQ}" -nc \
             --arg domain "${domain}" \
             '{status:"ok", state:"stopping", domain:$domain}'
         ;;
@@ -299,7 +309,7 @@ case "${ACTION}" in
                 tail_output=$(tail -20 "${log_file}" 2>/dev/null)
             fi
 
-            /usr/local/bin/jq -nc \
+            "${JQ}" -nc \
                 --arg domain "${domain}" \
                 --arg stage "${stage}" \
                 --arg winners "${winners}" \
@@ -338,7 +348,7 @@ case "${ACTION}" in
         if [ -f "${STOPFILE}" ]; then
             stopped=$(sed -n '1p' "${STOPFILE}")
             if ! valid_epoch "${stopped}"; then
-                /usr/local/bin/jq -nc \
+                "${JQ}" -nc \
                     --arg domain "${domain}" \
                     '{status:"error", state:"stopped", domain:$domain, message:"invalid blockcheck stop metadata"}'
                 exit 0
@@ -349,7 +359,7 @@ case "${ACTION}" in
                 elapsed=0
             fi
 
-            /usr/local/bin/jq -nc \
+            "${JQ}" -nc \
                 --arg domain "${domain}" \
                 --arg log_file "${log_file}" \
                 --argjson elapsed "${elapsed}" \
@@ -367,8 +377,8 @@ case "${ACTION}" in
             result_json=$(awk '/^[[:space:]]*\{/ {line=$0} END {print line}' "${RESULT}")
 
             if [ -n "${result_json}" ] && \
-               printf '%s\n' "${result_json}" | /usr/local/bin/jq -e . >/dev/null 2>&1; then
-                /usr/local/bin/jq -nc \
+               printf '%s\n' "${result_json}" | "${JQ}" -e . >/dev/null 2>&1; then
+                "${JQ}" -nc \
                     --arg domain "${domain}" \
                     --argjson elapsed "${elapsed}" \
                     --argjson result "${result_json}" \
@@ -380,13 +390,13 @@ case "${ACTION}" in
                         result:$result
                     }'
             else
-                /usr/local/bin/jq -nc \
+                "${JQ}" -nc \
                     --arg domain "${domain}" \
                     --argjson elapsed "${elapsed}" \
                     '{status:"error", state:"finished", domain:$domain, elapsed_seconds:$elapsed, message:"blockcheck finished without valid result"}'
             fi
         else
-            /usr/local/bin/jq -nc \
+            "${JQ}" -nc \
                 --arg domain "${domain}" \
                 --argjson elapsed "${elapsed}" \
                 '{status:"error", state:"finished", domain:$domain, elapsed_seconds:$elapsed, message:"blockcheck finished without result"}'

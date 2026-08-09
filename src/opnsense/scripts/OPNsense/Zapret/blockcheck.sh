@@ -17,6 +17,7 @@ ZAPRET_DIR="/usr/local/etc/zapret2"
 BLOCKCHECK="${ZAPRET_DIR}/blockcheck2.sh"
 CONFIG="${ZAPRET_DIR}/zapret.conf"
 WINNER_PARSER="/usr/local/opnsense/scripts/OPNsense/Zapret/blockcheck_winners.awk"
+JQ="/usr/local/bin/jq"
 
 DOMAIN="${1:-}"
 
@@ -83,7 +84,7 @@ emit_error() {
     finished_epoch=$(date -u +%s)
     finished_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     duration=$((finished_epoch - STARTED_EPOCH))
-    /usr/local/bin/jq -nc \
+    "${JQ}" -nc \
         --arg msg "$1" \
         --arg started "${STARTED_ISO}" \
         --arg finished "${finished_iso}" \
@@ -92,6 +93,11 @@ emit_error() {
 }
 
 # Argument validation
+if [ ! -x "${JQ}" ]; then
+    echo '{"status":"error","message":"jq is not installed — run setup.sh first"}'
+    exit 0
+fi
+
 case "${TIMEOUT}" in
     ''|*[!0-9]*)
         emit_error "invalid BLOCKCHECK_TIMEOUT"
@@ -122,9 +128,9 @@ fi
 # Resolve WAN device from plugin config
 . "${CONFIG}"
 WAN_DEV=""
-if [ -x /usr/local/bin/jq ]; then
+if [ -x "${JQ}" ]; then
     WAN_DEV=$(/usr/local/sbin/pluginctl -4 "${WAN_IF}" 2>/dev/null \
-        | /usr/local/bin/jq -r --arg if "${WAN_IF}" '.[$if][0].device // empty')
+        | "${JQ}" -r --arg if "${WAN_IF}" '.[$if][0].device // empty')
 fi
 [ -z "${WAN_DEV}" ] && WAN_DEV="${WAN_IF}"
 
@@ -159,15 +165,77 @@ PREV_IPFW=$(/sbin/sysctl -n net.inet.ip.fw.enable 2>/dev/null || echo 0)
 PREV_IPFW6=$(/sbin/sysctl -n net.inet6.ip6.fw.enable 2>/dev/null || echo 0)
 ADDED_BASELINE_RULE=0
 BLOCKCHECK_TMP=""
-
-# blockcheck2 refuses to run reliably while another DPI bypass is active.
-# Stop zapret if it's running — we'll restart it on exit if it was.
+FIREWALL_TOUCHED=0
 WAS_RUNNING=0
-if [ -f /var/run/dvtws2.pid ] && kill -0 "$(cat /var/run/dvtws2.pid)" 2>/dev/null; then
-    WAS_RUNNING=1
-    /usr/local/sbin/configctl zapret stop >/dev/null 2>&1
-    sleep 2
-fi
+ZAPRET_CHILD_PID=""
+ZAPRET_SUPERVISOR_PID=""
+ZAPRET_PIDFILE="/var/run/dvtws2.pid"
+ZAPRET_SUPERVISOR_PIDFILE="/var/run/dvtws2-supervisor.pid"
+
+process_matches()
+{
+    process_pid="$1"
+    first_marker="$2"
+    second_marker="${3:-}"
+
+    case "${process_pid}" in
+        ''|*[!0-9]*)
+            return 1
+            ;;
+    esac
+
+    kill -0 "${process_pid}" 2>/dev/null || return 1
+    process_command=$(ps -o command= -p "${process_pid}" 2>/dev/null)
+
+    if [ -n "${second_marker}" ]; then
+        case "${process_command}" in
+            *"${first_marker}"*"${second_marker}"*)
+                return 0
+                ;;
+        esac
+    else
+        case "${process_command}" in
+            *"${first_marker}"*)
+                return 0
+                ;;
+        esac
+    fi
+
+    return 1
+}
+
+read_managed_pid()
+{
+    pidfile="$1"
+    first_marker="$2"
+    second_marker="${3:-}"
+    CHECKED_PID=""
+
+    [ -f "${pidfile}" ] || return 1
+    checked_pid=$(cat "${pidfile}" 2>/dev/null)
+
+    case "${checked_pid}" in
+        ''|*[!0-9]*)
+            return 1
+            ;;
+    esac
+
+    kill -0 "${checked_pid}" 2>/dev/null || return 1
+    if ! process_matches "${checked_pid}" "${first_marker}" "${second_marker}"; then
+        return 2
+    fi
+
+    CHECKED_PID="${checked_pid}"
+    return 0
+}
+
+zapret_processes_running()
+{
+    process_matches "${ZAPRET_CHILD_PID}" dvtws2 ||
+        process_matches "${ZAPRET_SUPERVISOR_PID}" daemon zapret2 ||
+        /usr/bin/pgrep -x dvtws2 >/dev/null 2>&1 ||
+        /usr/bin/pgrep -f '^daemon: zapret2' >/dev/null 2>&1
+}
 
 # cleanup() runs unconditionally on exit (normal exit, SIGTERM from
 # configd timeout, SSH disconnect, ^C). Without this trap, a kill
@@ -183,24 +251,28 @@ fi
 # rebuilds NAT and per-interface state), and restore ipfw to the
 # state we found it in.
 cleanup() {
-    # Re-enable pf and rebuild the OPNsense ruleset. `pfctl -e` is a
-    # no-op if pf is already enabled. `pfctl -f /tmp/rules.debug`
-    # reloads the last-generated OPNsense ruleset; if for any reason
-    # that file is gone, fall back to `configctl filter reload` which
-    # regenerates it from config.xml.
-    /sbin/pfctl -e   >/dev/null 2>&1
-    if [ -f /tmp/rules.debug ]; then
-        /sbin/pfctl -f /tmp/rules.debug >/dev/null 2>&1
-    else
-        /usr/local/sbin/configctl filter reload >/dev/null 2>&1
-    fi
+    trap - INT TERM HUP
 
-    # ipfw teardown
-    /sbin/sysctl net.inet.ip.fw.enable=${PREV_IPFW}   >/dev/null 2>&1
-    /sbin/sysctl net.inet6.ip6.fw.enable=${PREV_IPFW6} >/dev/null 2>&1
-    [ "${ADDED_BASELINE_RULE}" = "1" ] && /sbin/ipfw -q delete 65000 2>/dev/null
-    [ "${WAS_IPDIVERT_LOADED}" = "0" ] && /sbin/kldunload ipdivert 2>/dev/null
-    [ "${WAS_IPFW_LOADED}" = "0" ] && /sbin/kldunload ipfw 2>/dev/null
+    if [ "${FIREWALL_TOUCHED}" = "1" ]; then
+        # Re-enable pf and rebuild the OPNsense ruleset. `pfctl -e` is a
+        # no-op if pf is already enabled. `pfctl -f /tmp/rules.debug`
+        # reloads the last-generated OPNsense ruleset; if for any reason
+        # that file is gone, fall back to `configctl filter reload` which
+        # regenerates it from config.xml.
+        /sbin/pfctl -e >/dev/null 2>&1
+        if [ -f /tmp/rules.debug ]; then
+            /sbin/pfctl -f /tmp/rules.debug >/dev/null 2>&1
+        else
+            /usr/local/sbin/configctl filter reload >/dev/null 2>&1
+        fi
+
+        # ipfw teardown
+        /sbin/sysctl net.inet.ip.fw.enable=${PREV_IPFW} >/dev/null 2>&1
+        /sbin/sysctl net.inet6.ip6.fw.enable=${PREV_IPFW6} >/dev/null 2>&1
+        [ "${ADDED_BASELINE_RULE}" = "1" ] && /sbin/ipfw -q delete 65000 2>/dev/null
+        [ "${WAS_IPDIVERT_LOADED}" = "0" ] && /sbin/kldunload ipdivert 2>/dev/null
+        [ "${WAS_IPFW_LOADED}" = "0" ] && /sbin/kldunload ipfw 2>/dev/null
+    fi
 
     # Bring zapret back if it was running
     [ -n "${BLOCKCHECK_TMP}" ] && rm -f "${BLOCKCHECK_TMP}"
@@ -209,7 +281,53 @@ cleanup() {
     # /var/log/zapret/blockcheck-*.log and is part of the persistent
     # archive (rotated by the next run, not by us).
 }
-trap cleanup EXIT INT TERM HUP
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
+
+# blockcheck2 refuses to run reliably while another DPI bypass is active.
+# Validate both daemon(8) pidfiles so a stale PID cannot make us stop an
+# unrelated process, and so the supervisor cannot respawn dvtws2 mid-scan.
+read_managed_pid "${ZAPRET_PIDFILE}" dvtws2
+child_state=$?
+[ "${child_state}" -eq 0 ] && ZAPRET_CHILD_PID="${CHECKED_PID}"
+
+read_managed_pid "${ZAPRET_SUPERVISOR_PIDFILE}" daemon zapret2
+supervisor_state=$?
+[ "${supervisor_state}" -eq 0 ] && ZAPRET_SUPERVISOR_PID="${CHECKED_PID}"
+
+if [ "${child_state}" -eq 2 ] || [ "${supervisor_state}" -eq 2 ]; then
+    emit_error "zapret pidfile points to an unexpected process"
+    exit 0
+fi
+
+if [ "${child_state}" -ne 0 ] && [ "${supervisor_state}" -ne 0 ]; then
+    if zapret_processes_running; then
+        emit_error "unmanaged zapret process is running"
+        exit 0
+    fi
+fi
+
+if [ "${child_state}" -eq 0 ] || [ "${supervisor_state}" -eq 0 ]; then
+    WAS_RUNNING=1
+
+    if ! /usr/local/sbin/configctl zapret stop >/dev/null 2>&1; then
+        emit_error "could not stop zapret before blockcheck"
+        exit 0
+    fi
+
+    stop_wait=0
+    while [ "${stop_wait}" -lt 50 ] && zapret_processes_running; do
+        sleep 0.1
+        stop_wait=$((stop_wait + 1))
+    done
+
+    if zapret_processes_running; then
+        emit_error "zapret processes did not stop before blockcheck"
+        exit 0
+    fi
+fi
+
+FIREWALL_TOUCHED=1
 
 if ! /sbin/kldstat -q -m ipdivert && ! /sbin/kldload ipdivert; then
     emit_error "could not load ipdivert kernel module"
@@ -418,7 +536,7 @@ if [ -z "${SUMMARY}" ]; then
 ${CONFIRMED_WINNERS}"
 
     if [ -z "${CONFIRMED_WINNERS}" ]; then
-        /usr/local/bin/jq -nc \
+        "${JQ}" -nc \
             --arg msg "blockcheck did not produce a summary or any confirmed winners (exit=${EXIT})" \
             --arg started "${STARTED_ISO}" \
             --arg finished "${FINISHED_ISO}" \
@@ -439,7 +557,7 @@ WINNING=$(printf '%s\n' "${SUMMARY}" \
     | awk '!seen[$0]++' \
     | head -30)
 
-/usr/local/bin/jq -nc \
+"${JQ}" -nc \
     --arg domain "${DOMAIN}" \
     --arg summary "${SUMMARY}" \
     --arg winning "${WINNING}" \
