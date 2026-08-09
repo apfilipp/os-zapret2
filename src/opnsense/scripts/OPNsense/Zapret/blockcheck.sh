@@ -148,8 +148,12 @@ fi
 #      the trap below re-enables pf and reloads OPNsense's ruleset.
 WAS_IPFW_LOADED=0
 /sbin/kldstat -q -m ipfw && WAS_IPFW_LOADED=1
+WAS_IPDIVERT_LOADED=0
+/sbin/kldstat -q -m ipdivert && WAS_IPDIVERT_LOADED=1
 PREV_IPFW=$(/sbin/sysctl -n net.inet.ip.fw.enable 2>/dev/null || echo 0)
 PREV_IPFW6=$(/sbin/sysctl -n net.inet6.ip6.fw.enable 2>/dev/null || echo 0)
+ADDED_BASELINE_RULE=0
+BLOCKCHECK_TMP=""
 
 # blockcheck2 refuses to run reliably while another DPI bypass is active.
 # Stop zapret if it's running — we'll restart it on exit if it was.
@@ -189,7 +193,8 @@ cleanup() {
     # ipfw teardown
     /sbin/sysctl net.inet.ip.fw.enable=${PREV_IPFW}   >/dev/null 2>&1
     /sbin/sysctl net.inet6.ip6.fw.enable=${PREV_IPFW6} >/dev/null 2>&1
-    /sbin/ipfw -q delete 65000 2>/dev/null
+    [ "${ADDED_BASELINE_RULE}" = "1" ] && /sbin/ipfw -q delete 65000 2>/dev/null
+    [ "${WAS_IPDIVERT_LOADED}" = "0" ] && /sbin/kldunload ipdivert 2>/dev/null
     [ "${WAS_IPFW_LOADED}" = "0" ] && /sbin/kldunload ipfw 2>/dev/null
 
     # Bring zapret back if it was running
@@ -201,38 +206,71 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
-/sbin/kldstat -q -m ipdivert || /sbin/kldload ipdivert
-/sbin/kldstat -q -m ipfw     || /sbin/kldload ipfw
+if ! /sbin/kldstat -q -m ipdivert && ! /sbin/kldload ipdivert; then
+    emit_error "could not load ipdivert kernel module"
+    exit 0
+fi
+if ! /sbin/kldstat -q -m ipfw && ! /sbin/kldload ipfw; then
+    emit_error "could not load ipfw kernel module"
+    exit 0
+fi
 
-# Add baseline allow BEFORE enabling. Rules can be added while ipfw is
-# disabled — they just don't take effect until enable=1. Using a fixed
-# high slot (65000) means we can find and delete it again on cleanup
-# without grepping the ruleset.
-/sbin/ipfw -q add 65000 allow ip from any to any 2>/dev/null
+# Add a temporary baseline allow before enabling ipfw only when the kernel's
+# default policy is deny. Never reuse or delete an existing rule 65000: it may
+# belong to another OPNsense component.
+DEFAULT_TO_ACCEPT=$(/sbin/sysctl -n net.inet.ip.fw.default_to_accept 2>/dev/null || echo 0)
+if [ "${DEFAULT_TO_ACCEPT}" != "1" ]; then
+    if /sbin/ipfw -q list 65000 >/dev/null 2>&1; then
+        emit_error "cannot prepare ipfw: rule 65000 is already in use"
+        exit 0
+    fi
+    if ! /sbin/ipfw -q add 65000 allow ip from any to any 2>/dev/null; then
+        emit_error "could not install temporary ipfw safety rule"
+        exit 0
+    fi
+    if ! /sbin/ipfw -q list 65000 2>/dev/null | grep -q 'allow ip from any to any'; then
+        emit_error "temporary ipfw safety rule could not be verified"
+        exit 0
+    fi
+    ADDED_BASELINE_RULE=1
+fi
 
-/sbin/sysctl net.inet.ip.fw.enable=1   >/dev/null 2>&1
-/sbin/sysctl net.inet6.ip6.fw.enable=1 >/dev/null 2>&1
+if ! /sbin/sysctl net.inet.ip.fw.enable=1 >/dev/null 2>&1; then
+    emit_error "could not enable IPv4 ipfw"
+    exit 0
+fi
+if ! /sbin/sysctl net.inet6.ip6.fw.enable=1 >/dev/null 2>&1; then
+    emit_error "could not enable IPv6 ipfw"
+    exit 0
+fi
 
 # OPNsense must keep pf enabled while blockcheck runs.
 # Put ipfw ahead of pf in the pfil chain, then run a temporary copy of
 # upstream blockcheck2.sh with its per-test "pfctl -qd" disabled.
 BLOCKCHECK_RUN="${BLOCKCHECK}"
-BLOCKCHECK_TMP=""
 
 if [ -f /usr/local/opnsense/version/core ]; then
-    /sbin/pfctl -d >/dev/null 2>&1
-    /sbin/pfctl -e >/dev/null 2>&1
+    if ! /sbin/pfctl -d >/dev/null 2>&1; then
+        emit_error "could not detach pf before pfil reordering"
+        exit 0
+    fi
+    if ! /sbin/pfctl -e >/dev/null 2>&1; then
+        emit_error "could not re-enable pf after pfil reordering"
+        exit 0
+    fi
 
     BLOCKCHECK_TMP="/tmp/blockcheck2-opnsense.$$"
+
     sed \
         -e 's/pf_is_avail && pfctl -qd/: # OPNsense: keep pf enabled/' \
-	-e 's|"$DVTWS2" --port=$IPFW_DIVERT_PORT |"$DVTWS2" --port=$IPFW_DIVERT_PORT --sockarg=0x200 --user=nobody |' \
+        -e 's|"$DVTWS2" --port=$IPFW_DIVERT_PORT |"$DVTWS2" --port=$IPFW_DIVERT_PORT --sockarg=0x200 --user=nobody |' \
         -e 's|out not diverted$|out not diverted not sockarg xmit $IFACE_WAN|' \
-	-e 's|IPFW_ADD divert $IPFW_DIVERT_PORT tcp from $ip $1 to me proto ip${IPV} tcpflags syn,ack in not diverted|: # OPNsense: do not divert inbound SYN+ACK|' \
+        -e 's|IPFW_ADD divert $IPFW_DIVERT_PORT tcp from $ip $1 to me proto ip${IPV} tcpflags syn,ack in not diverted|: # OPNsense: do not divert inbound SYN+ACK|' \
         "${BLOCKCHECK}" > "${BLOCKCHECK_TMP}" || {
         emit_error "could not prepare OPNsense blockcheck wrapper"
         exit 0
     }
+
     chmod 700 "${BLOCKCHECK_TMP}"
     BLOCKCHECK_RUN="${BLOCKCHECK_TMP}"
 fi
