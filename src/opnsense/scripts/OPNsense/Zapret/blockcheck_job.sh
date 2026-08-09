@@ -100,6 +100,16 @@ acquire_start_lock()
     return 0
 }
 
+valid_epoch()
+{
+    case "${1:-}" in
+        ''|*[!0-9]*|0?*|????????????*)
+            return 1
+            ;;
+    esac
+    return 0
+}
+
 case "${ACTION}" in
     start)
         if [ -z "${DOMAIN}" ]; then
@@ -178,10 +188,28 @@ case "${ACTION}" in
         domain=$(sed -n '1p' "${META}")
         started=$(sed -n '2p' "${META}")
 
+        if ! valid_epoch "${started}"; then
+            echo '{"status":"error","message":"invalid blockcheck start metadata"}'
+            exit 0
+        fi
+
         if ! is_running; then
             /usr/local/bin/jq -nc \
                 --arg domain "${domain}" \
                 '{status:"ok", state:"stopped", domain:$domain}'
+            exit 0
+        fi
+
+        if [ -f "${STOPFILE}" ]; then
+            stopped=$(sed -n '1p' "${STOPFILE}")
+            if ! valid_epoch "${stopped}"; then
+                echo '{"status":"error","message":"invalid blockcheck stop metadata"}'
+                exit 0
+            fi
+
+            /usr/local/bin/jq -nc \
+                --arg domain "${domain}" \
+                '{status:"ok", state:"stopping", domain:$domain}'
             exit 0
         fi
 
@@ -195,10 +223,22 @@ case "${ACTION}" in
                 ;;
         esac
 
-        date -u +%s > "${STOPFILE}"
+        stopped=$(date -u +%s)
+        if ! printf '%s\n' "${stopped}" > "${STOPFILE}.$$"; then
+            rm -f "${STOPFILE}.$$"
+            echo '{"status":"error","message":"could not create blockcheck stop metadata"}'
+            exit 0
+        fi
 
         if ! /bin/kill -TERM "-${pgid}" 2>/dev/null; then
+            rm -f "${STOPFILE}.$$"
             echo '{"status":"error","message":"could not stop blockcheck process group"}'
+            exit 0
+        fi
+
+        if ! mv -f "${STOPFILE}.$$" "${STOPFILE}"; then
+            rm -f "${STOPFILE}.$$"
+            echo '{"status":"error","message":"could not publish blockcheck stop metadata"}'
             exit 0
         fi
 
@@ -215,8 +255,17 @@ case "${ACTION}" in
 
         domain=$(sed -n '1p' "${META}")
         started=$(sed -n '2p' "${META}")
+
+        if ! valid_epoch "${started}"; then
+            echo '{"status":"error","message":"invalid blockcheck start metadata"}'
+            exit 0
+        fi
+
         now=$(date -u +%s)
         elapsed=$((now - started))
+        if [ "${elapsed}" -lt 0 ]; then
+            elapsed=0
+        fi
 
         log_domain=$(printf '%s' "${domain}" | tr -c 'a-zA-Z0-9.-' '_')
 		log_file=$(ls -1t "${LOG_DIR}"/blockcheck-*-"${log_domain}".log 2>/dev/null | head -1)
@@ -285,20 +334,33 @@ case "${ACTION}" in
             exit 0
         fi
 
-	if [ -f "${STOPFILE}" ]; then
+        if [ -f "${STOPFILE}" ]; then
+            stopped=$(sed -n '1p' "${STOPFILE}")
+            if ! valid_epoch "${stopped}"; then
+                /usr/local/bin/jq -nc \
+                    --arg domain "${domain}" \
+                    '{status:"error", state:"stopped", domain:$domain, message:"invalid blockcheck stop metadata"}'
+                exit 0
+            fi
+
+            elapsed=$((stopped - started))
+            if [ "${elapsed}" -lt 0 ]; then
+                elapsed=0
+            fi
+
             /usr/local/bin/jq -nc \
                 --arg domain "${domain}" \
-            	--arg log_file "${log_file}" \
-            	--argjson elapsed "${elapsed}" \
-            	'{
+                --arg log_file "${log_file}" \
+                --argjson elapsed "${elapsed}" \
+                '{
                     status:"ok",
                     state:"stopped",
                     domain:$domain,
                     elapsed_seconds:$elapsed,
                     log_file:$log_file
-            	}'
+                }'
             exit 0
-    	fi
+        fi
 
         if [ -s "${RESULT}" ]; then
             result_json=$(awk '/^[[:space:]]*\{/ {line=$0} END {print line}' "${RESULT}")
