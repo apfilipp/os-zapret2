@@ -233,25 +233,30 @@ start_service() {
 	[ -n "${HTTPS_ARGS}" ]   && args="${args} ${HTTPS_ARGS}"
 	
 	local hostlist_args=""
-
-    if [ "${HOSTLIST_MODE}" = "list" ] && [ -f "${HOSTLIST}" ] && [ -s "${HOSTLIST}" ]; then
-        hostlist_args="${hostlist_args} --hostlist=${HOSTLIST}"
-    elif [ "${HOSTLIST_MODE}" = "auto" ]; then
-        touch "${AUTOHOSTLIST}" 2>/dev/null
-        hostlist_args="${hostlist_args} --hostlist-auto=${AUTOHOSTLIST}"
-    fi
-    
-    if [ -f "${HOSTLIST_EXCLUDE}" ] && [ -s "${HOSTLIST_EXCLUDE}" ]; then
-        hostlist_args="${hostlist_args} --hostlist-exclude=${HOSTLIST_EXCLUDE}"
-    fi
-    
-    # Apply host filtering to the TCP profile.
-    args="${args}${hostlist_args}"
-    
-    # QUIC is a separate UDP profile.
-    if [ -n "${QUIC_ARGS}" ]; then
-        args="${args} --new --filter-udp=443 --filter-l7=quic${hostlist_args} ${QUIC_ARGS}"
-    fi
+	local hostlist_noauto_args=""
+	
+	if [ "${HOSTLIST_MODE}" = "list" ] && [ -f "${HOSTLIST}" ] && [ -s "${HOSTLIST}" ]; then
+		hostlist_args="${hostlist_args} --hostlist=${HOSTLIST}"
+		hostlist_noauto_args="${hostlist_noauto_args} --hostlist=${HOSTLIST}"
+	elif [ "${HOSTLIST_MODE}" = "auto" ]; then
+		touch "${AUTOHOSTLIST}" 2>/dev/null
+		hostlist_args="${hostlist_args} --hostlist-auto=${AUTOHOSTLIST}"
+		hostlist_noauto_args="${hostlist_noauto_args} --hostlist=${AUTOHOSTLIST}"
+	fi
+	
+	if [ -f "${HOSTLIST_EXCLUDE}" ] && [ -s "${HOSTLIST_EXCLUDE}" ]; then
+		hostlist_args="${hostlist_args} --hostlist-exclude=${HOSTLIST_EXCLUDE}"
+		hostlist_noauto_args="${hostlist_noauto_args} --hostlist-exclude=${HOSTLIST_EXCLUDE}"
+	fi
+	
+	# Apply host filtering to the TCP profile.
+	args="${args}${hostlist_args}"
+	
+	# QUIC is a separate UDP profile. Auto-hostlist entries are used as a
+	# regular hostlist here, matching upstream <HOSTLIST_NOAUTO> semantics.
+	if [ -n "${QUIC_ARGS}" ]; then
+		args="${args} --new --filter-udp=443 --filter-l7=quic${hostlist_noauto_args} ${QUIC_ARGS}"
+	fi
     
     [ -n "${EXTRA_ARGS}" ] && args="${args} ${EXTRA_ARGS}"
 
