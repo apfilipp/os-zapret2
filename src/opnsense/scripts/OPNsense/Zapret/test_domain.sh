@@ -234,34 +234,20 @@ test_ip()
     attempt=1
     passed=0
 
-    {
-        printf '\n--- IPv4 %s ---\n' "${test_address}"
+    while [ "${attempt}" -le "${ATTEMPTS}" ]; do
+        if "${CURL}" -4 -sk \
+            --connect-timeout 5 \
+            --max-time 5 \
+            --resolve "${DOMAIN}:443:${test_address}" \
+            -o /dev/null \
+            "https://${DOMAIN}/" >/dev/null 2>&1; then
+            passed=$((passed + 1))
+        fi
 
-        while [ "${attempt}" -le "${ATTEMPTS}" ]; do
-            metrics=$("${CURL}" -4 -sk \
-                --connect-timeout 5 \
-                --max-time 5 \
-                --resolve "${DOMAIN}:443:${test_address}" \
-                -o /dev/null \
-                -w 'http=%{http_code} remote=%{remote_ip} connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s' \
-                "https://${DOMAIN}/" 2>&1)
-            curl_result=$?
-            metrics=$(printf '%s' "${metrics}" | tr '\r\n' '  ' | sed 's/[[:space:]]*$//')
+        attempt=$((attempt + 1))
+    done
 
-            if [ "${curl_result}" -eq 0 ]; then
-                outcome="PASS"
-                passed=$((passed + 1))
-            else
-                outcome="FAIL"
-            fi
-
-            printf '  %02d %s curl=%d %s\n' \
-                "${attempt}" "${outcome}" "${curl_result}" "${metrics}"
-            attempt=$((attempt + 1))
-        done
-
-        printf 'IP summary: %d/%d passed\n' "${passed}" "${ATTEMPTS}"
-    } > "${output_file}"
+    printf '%d\n' "${passed}" > "${output_file}"
 }
 
 if [ -z "${DOMAIN}" ]; then
@@ -313,8 +299,6 @@ address_count=$(printf '%s\n' "${DNS_RESULT}" | wc -l | tr -d '[:space:]')
     echo "Strategy source: ${STRATEGY_SOURCE}"
     echo "Strategy: ${STRATEGY}"
     echo "Attempts per IP: ${ATTEMPTS}"
-    echo "Resolved IPv4 addresses (${address_count}):"
-    printf '  %s\n' ${DNS_RESULT}
 } > "${LOG_FILE}"
 
 if [ "${STRATEGY_TEST_SKIP_DVTWS:-0}" != "1" ]; then
@@ -401,21 +385,24 @@ WORKER_PIDS=""
 total_passed=0
 total_attempts=$((address_count * ATTEMPTS))
 
+{
+    echo ""
+    echo "=== Results ==="
+} >> "${LOG_FILE}"
+
 for test_address in ${DNS_RESULT}; do
     safe_address=$(printf '%s' "${test_address}" | tr -c '0-9A-Za-z.-' '_')
     result_file="${RUN_DIR}/result-${safe_address}"
-    cat "${result_file}" >> "${LOG_FILE}"
-    passed=$(grep -cE '^  [0-9][0-9] PASS ' "${result_file}" 2>/dev/null || true)
+    passed=$(cat "${result_file}" 2>/dev/null || echo 0)
+    case "${passed}" in
+        ''|*[!0-9]*)
+            passed=0
+            ;;
+    esac
+    printf '%s - %d/%d successful\n' \
+        "${test_address}" "${passed}" "${ATTEMPTS}" >> "${LOG_FILE}"
     total_passed=$((total_passed + passed))
 done
-
-if [ "${STRATEGY_TEST_SKIP_DVTWS:-0}" != "1" ]; then
-    {
-        echo ""
-        echo "=== Temporary ipfw counters ==="
-        "${IPFW}" -a list "${TEMP_RULE}" 2>/dev/null || true
-    } >> "${LOG_FILE}"
-fi
 
 if [ "${total_passed}" -eq "${total_attempts}" ]; then
     verdict="STABLE"

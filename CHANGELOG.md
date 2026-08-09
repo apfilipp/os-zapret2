@@ -10,8 +10,8 @@ All notable changes to os-zapret2 are documented in this file.
   paste dvtws2 arguments (or leave the field empty to use the configured HTTPS
   strategy), resolve every IPv4 address for a domain, and run ten TLS requests
   against each address. The test uses an isolated temporary dvtws2 instance
-  and a target-specific ipfw rule, reports per-attempt timings and curl exit
-  codes, writes a persistent log under `/var/log/zapret`, and leaves the
+  and a target-specific ipfw rule, reports compact per-address success counts,
+  writes a persistent log under `/var/log/zapret`, and leaves the
   configured service and its firewall rules unchanged. The UI explicitly
   identifies this as a firewall-originated test rather than a LAN-path test.
 
