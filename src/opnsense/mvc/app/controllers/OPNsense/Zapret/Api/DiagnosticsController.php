@@ -40,9 +40,28 @@ class DiagnosticsController extends ApiControllerBase
     {
         if ($this->request->isPost()) {
             $domain = $this->request->getPost('domain', 'striptags', '');
+            $strategy = $this->request->getPost('strategy', null, '');
+
+            if (!is_string($strategy)) {
+                return ['status' => 'error', 'message' => 'Invalid strategy value.'];
+            }
+
+            $strategy = trim($strategy);
+
             if (!empty($domain) && preg_match('/^[a-zA-Z0-9\.\-]+$/', $domain)) {
+                if (strlen($strategy) > 4096) {
+                    return ['status' => 'error', 'message' => 'Strategy is longer than 4096 characters.'];
+                }
+
+                if ($strategy !== '' && preg_match('/[^\x20-\x7e]/', $strategy)) {
+                    return ['status' => 'error', 'message' => 'Strategy must be a single line of ASCII arguments.'];
+                }
+
                 $backend = new \OPNsense\Core\Backend();
-                $response = $backend->configdpRun('zapret testdomain', [$domain]);
+                $response = $backend->configdpRun(
+                    'zapret testdomain',
+                    [$domain, base64_encode($strategy)]
+                );
                 return ['status' => 'ok', 'result' => $response];
             }
             return ['status' => 'error', 'message' => 'Invalid domain name.'];

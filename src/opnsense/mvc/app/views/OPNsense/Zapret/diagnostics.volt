@@ -416,6 +416,7 @@
         // ---- Test Domain Connectivity ----
         $("#testDomainBtn").click(function() {
             var domain = $("#testDomainInput").val().trim();
+            var strategy = $("#testStrategyInput").val().trim();
 
             if (!domain) {
                 BootstrapDialog.show({
@@ -426,13 +427,20 @@
                 return;
             }
 
+            $("#testDomainBtn").prop("disabled", true);
             $("#testDomainBtn_progress").addClass("fa fa-spinner fa-pulse");
-            $("#testDomainResult").text("Testing...");
+            $("#testDomainResult").text(
+                "Resolving all IPv4 addresses and running 10 TLS tests per address..."
+            );
 
             ajaxCall(
                 '/api/zapret/diagnostics/testdomain',
-                {'domain': domain},
+                {
+                    'domain': domain,
+                    'strategy': strategy
+                },
                 function(data, status) {
+                    $("#testDomainBtn").prop("disabled", false);
                     $("#testDomainBtn_progress").removeClass("fa fa-spinner fa-pulse");
 
                     if (data.status === 'ok') {
@@ -605,6 +613,24 @@
                                             </button>
                                         </td>
                                     </tr>
+                                    <tr>
+                                        <td style="width: 200px; vertical-align: top;">
+                                            {{ lang._('HTTPS Strategy') }}
+                                        </td>
+
+                                        <td colspan="2">
+                                            <textarea
+                                                class="form-control"
+                                                id="testStrategyInput"
+                                                rows="3"
+                                                spellcheck="false"
+                                                placeholder="--payload=tls_client_hello --lua-desync=..."
+                                            ></textarea>
+                                            <small class="text-muted">
+                                                {{ lang._('Paste the dvtws2 arguments from blockcheck. Leave empty to test the currently configured HTTPS Strategy. Every resolved IPv4 address is tested 10 times from the firewall itself through an isolated temporary rule; LAN-client routing is not simulated.') }}
+                                            </small>
+                                        </td>
+                                    </tr>
                                 </tbody>
                             </table>
                         </div>
@@ -612,8 +638,8 @@
                         <div class="col-md-12">
                             <pre
                                 id="testDomainResult"
-                                style="max-height: 300px; overflow-y: auto; white-space: pre-wrap;"
-                            >{{ lang._('Enter a domain and click Test to check HTTPS connectivity.') }}</pre>
+                                style="max-height: 500px; overflow-y: auto; white-space: pre-wrap;"
+                            >{{ lang._('Enter a domain and optionally a strategy, then click Test. All IPv4 addresses will be tested 10 times.') }}</pre>
                         </div>
 
                     </div>
