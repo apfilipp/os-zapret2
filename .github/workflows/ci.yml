@@ -39,6 +39,9 @@ jobs:
           sh -n src/etc/rc.syshook.d/stop/20-zapret
           echo "All shell scripts are valid."
 
+      - name: Test blockcheck winner parser
+        run: sh tests/blockcheck_winners_test.sh
+
       - name: Check file structure
         run: |
           echo "Checking required files..."

@@ -3,6 +3,7 @@
 # blockcheck_job.sh — background job controller for blockcheck.sh
 
 BLOCKCHECK="/usr/local/opnsense/scripts/OPNsense/Zapret/blockcheck.sh"
+WINNER_PARSER="/usr/local/opnsense/scripts/OPNsense/Zapret/blockcheck_winners.awk"
 PIDFILE="/var/run/zapret-blockcheck.pid"
 RESULT="/var/run/zapret-blockcheck.result"
 META="/var/run/zapret-blockcheck.meta"
@@ -119,6 +120,11 @@ case "${ACTION}" in
 
         if ! echo "${DOMAIN}" | grep -qE '^[a-zA-Z0-9][a-zA-Z0-9.-]+[a-zA-Z]{2,}$'; then
             echo '{"status":"error","message":"invalid domain format"}'
+            exit 0
+        fi
+
+        if [ ! -r "${WINNER_PARSER}" ]; then
+            echo '{"status":"error","message":"blockcheck winner parser not found"}'
             exit 0
         fi
 
@@ -289,17 +295,7 @@ case "${ACTION}" in
             if [ -n "${log_file}" ] && [ -f "${log_file}" ]; then
                 stage=$(grep -E '^[*-] curl_test_' "${log_file}" 2>/dev/null | tail -1)
                 attempts=$(grep -cE '^- curl_test_.* : dvtws2 ' "${log_file}" 2>/dev/null)
-		winners=$(awk '
- 		    /^- curl_test_/ {
-        		candidate=$0
-       		        next
-    		}
-	    
-	        /^[[:space:]]*!!!!! AVAILABLE !!!!!/ && candidate != "" {
-        	    print candidate
-        	    candidate=""
-    	  	}
-		' "${log_file}" 2>/dev/null)
+                winners=$(awk -v prefix='-' -f "${WINNER_PARSER}" "${log_file}" 2>/dev/null | head -30)
                 tail_output=$(tail -20 "${log_file}" 2>/dev/null)
             fi
 
@@ -318,16 +314,21 @@ case "${ACTION}" in
                     elapsed_seconds:$elapsed,
                     stage:$stage,
                     attempts:$attempts,
-		    winners:(
-		        $winners
-			| split("\n")
-			| map(
- 			    select(length > 0)
-			    | . as $line
-			    | try capture("^- (?<test>[^ ]+) ipv(?<ip_version>[0-9]+) (?<domain>[^ ]+) : (?<daemon>[^ ]+) (?<strategy>.*)$")
- 			      catch {raw:$line}
-			  )
-		    ),                    
+                    winners:(
+                        $winners
+                        | split("\n")
+                        | map(
+                            select(length > 0)
+                            | . as $line
+                            | if test(" : working without bypass$") then
+                                try capture("^- (?<test>[^ ]+) ipv(?<ip_version>[0-9]+) (?<domain>[^ ]+) : (?<strategy>working without bypass)$")
+                                catch {raw:$line}
+                              else
+                                try capture("^- (?<test>[^ ]+) ipv(?<ip_version>[0-9]+) (?<domain>[^ ]+) : (?<daemon>[^ ]+) (?<strategy>.*)$")
+                                catch {raw:$line}
+                              end
+                          )
+                    ),
                     log_file:$log_file,
                     tail:$tail
                 }'

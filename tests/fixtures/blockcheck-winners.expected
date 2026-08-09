@@ -1,0 +1,3 @@
+curl_test_http ipv4 direct.example : working without bypass
+curl_test_http ipv4 direct.example : dvtws2 --payload=http_req --lua-desync=multisplit:pos=host+1
+curl_test_http3 ipv6 old.example : dvtws2 --payload=quic_initial --lua-desync=fake

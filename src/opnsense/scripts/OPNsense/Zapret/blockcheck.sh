@@ -16,6 +16,7 @@
 ZAPRET_DIR="/usr/local/etc/zapret2"
 BLOCKCHECK="${ZAPRET_DIR}/blockcheck2.sh"
 CONFIG="${ZAPRET_DIR}/zapret.conf"
+WINNER_PARSER="/usr/local/opnsense/scripts/OPNsense/Zapret/blockcheck_winners.awk"
 
 DOMAIN="${1:-}"
 
@@ -111,6 +112,10 @@ if [ ! -x "${BLOCKCHECK}" ]; then
 fi
 if [ ! -f "${CONFIG}" ]; then
     emit_error "zapret config not found — save plugin settings first"
+    exit 0
+fi
+if [ ! -r "${WINNER_PARSER}" ]; then
+    emit_error "blockcheck winner parser not found — reinstall the plugin"
     exit 0
 fi
 
@@ -393,44 +398,28 @@ FINISHED_EPOCH=$(date -u +%s)
 FINISHED_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 DURATION=$((FINISHED_EPOCH - STARTED_EPOCH))
 
-# Try the proper SUMMARY first. blockcheck2 emits `* SUMMARY` only at
-# the end of a complete run; everything from that line to EOF is what
-# we want.
-SUMMARY=$(awk '/^\* SUMMARY/,0' "${LOG}" 2>/dev/null)
+# Prefer the final SUMMARY produced by current or older blockcheck2.
+SUMMARY=$(awk '/^[-*] SUMMARY/,0' "${LOG}" 2>/dev/null)
 
-# Fallback for timed-out / interrupted runs:
-# blockcheck2 prints `!!!!! <test>: working strategy found for ipv<X>
-# <domain> : <strategy> !!!!!` INLINE, the moment it confirms each
-# protocol's first winner — well before the final SUMMARY. So even on
-# `timeout`-induced kills we have actionable per-protocol picks. We
-# build a synthetic SUMMARY from those lines + any
-# "working without bypass" notes that were already recorded.
-#
-# This is what makes a 25-min run usable when the full sweep would
-# need 45+. The user gets HTTP+TLS12 winners even if TLS13 didn't
-# finish.
 PARTIAL=0
+
 if [ -z "${SUMMARY}" ]; then
     PARTIAL=1
-    INLINE_WINNERS=$(grep -E '^!!!!! curl_test_.*working strategy found' "${LOG}" 2>/dev/null \
-        | sed -E 's/^!!!!! ([^:]+): working strategy found for (ipv[46]) ([^ ]+) : (.+) !!!!!$/\1 \2 \3 : \4/' \
-        | head -10)
-    BASELINE_WINNERS=$(grep -E 'working without bypass' "${LOG}" 2>/dev/null | head -10)
 
-    # Combine into a SUMMARY-shaped block so downstream code paths see
-    # the same format as a real SUMMARY.
-    SUMMARY="* SUMMARY (partial — blockcheck did not finish, exit=${EXIT})"
-    [ -n "${INLINE_WINNERS}" ]   && SUMMARY="${SUMMARY}
-${INLINE_WINNERS}"
-    [ -n "${BASELINE_WINNERS}" ] && SUMMARY="${SUMMARY}
-${BASELINE_WINNERS}"
+    # blockcheck2 confirms each individual test with a terminal AVAILABLE
+    # marker before it eventually prints SUMMARY. The parser keeps that
+    # marker tied to its own candidate and clears failed candidates, so an
+    # unrelated later success cannot become a false winner.
+    CONFIRMED_WINNERS=$(awk -f "${WINNER_PARSER}" "${LOG}" 2>/dev/null | head -30)
 
-    # If neither path produced anything, we truly have no signal —
-    # surface as an error with the tail of the log so the user can
-    # see what blockcheck2 was doing when it died.
-    if [ -z "${INLINE_WINNERS}" ] && [ -z "${BASELINE_WINNERS}" ]; then
+    SUMMARY="- SUMMARY (partial - blockcheck did not finish, exit=${EXIT})"
+
+    [ -n "${CONFIRMED_WINNERS}" ] && SUMMARY="${SUMMARY}
+${CONFIRMED_WINNERS}"
+
+    if [ -z "${CONFIRMED_WINNERS}" ]; then
         /usr/local/bin/jq -nc \
-            --arg msg "blockcheck did not produce a summary or any inline winners (exit=${EXIT})" \
+            --arg msg "blockcheck did not produce a summary or any confirmed winners (exit=${EXIT})" \
             --arg started "${STARTED_ISO}" \
             --arg finished "${FINISHED_ISO}" \
             --argjson duration "${DURATION}" \
@@ -441,12 +430,14 @@ ${BASELINE_WINNERS}"
     fi
 fi
 
-# Extract useful lines from the summary. blockcheck2 produces:
-#   "working without bypass"  → site was never blocked; no strategy needed
-#   "<strategy> : works"      → a strategy that defeated the DPI
-#   "curl_test_* : ok"        → specific test that passed
-# Anything else is noise.
-WINNING=$(echo "${SUMMARY}" | grep -iE 'works|^[^ ]+ : ok|without bypass|working strategy found' | head -30)
+# Current SUMMARY format:
+#   curl_test_http3 ipv4 example.com : dvtws2 --payload=...
+# or a connection that already works without bypass.
+WINNING=$(printf '%s\n' "${SUMMARY}" \
+    | grep -E '^[[:space:]]*curl_test_.* : (dvtws2 --|working without bypass)' \
+    | sed -E 's/^[[:space:]]*//' \
+    | awk '!seen[$0]++' \
+    | head -30)
 
 /usr/local/bin/jq -nc \
     --arg domain "${DOMAIN}" \
@@ -457,6 +448,6 @@ WINNING=$(echo "${SUMMARY}" | grep -iE 'works|^[^ ]+ : ok|without bypass|working
     --argjson duration "${DURATION}" \
     --arg log_file "${LOG}" \
     --argjson partial "${PARTIAL}" \
-    '{status:"ok", domain:$domain, partial:($partial==1), started:$started, finished:$finished, duration_seconds:$duration, log_file:$log_file, summary:$summary, winning:($winning|split("\n"))}'
+    '{status:"ok", domain:$domain, partial:($partial==1), started:$started, finished:$finished, duration_seconds:$duration, log_file:$log_file, summary:$summary, winning:($winning|split("\n")|map(select(length > 0)))}'
 
 exit 0
