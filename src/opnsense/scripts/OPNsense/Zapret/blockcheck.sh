@@ -17,6 +17,13 @@ ZAPRET_DIR="/usr/local/etc/zapret2"
 BLOCKCHECK="${ZAPRET_DIR}/blockcheck2.sh"
 CONFIG="${ZAPRET_DIR}/zapret.conf"
 
+DOMAIN="${1:-}"
+
+# Hard upper bound for a detached blockcheck run. The job controller is
+# asynchronous, so configd's short action timeout cannot stop a hung upstream
+# process for us. Callers may override this with BLOCKCHECK_TIMEOUT.
+TIMEOUT="${BLOCKCHECK_TIMEOUT:-1500}"
+
 MODE="${2:-all}"
 
 case "${MODE}" in
@@ -84,6 +91,12 @@ emit_error() {
 }
 
 # Argument validation
+case "${TIMEOUT}" in
+    ''|*[!0-9]*)
+        emit_error "invalid BLOCKCHECK_TIMEOUT"
+        exit 0
+        ;;
+esac
 if [ -z "${DOMAIN}" ]; then
     emit_error "no domain specified"
     exit 0
@@ -302,7 +315,8 @@ if [ -n "${CURL_CA_BUNDLE}" ]; then
     export CURL_CA_BUNDLE
 fi
 
-/usr/bin/timeout ${TIMEOUT} /bin/sh "${BLOCKCHECK_RUN}" >"${LOG}" 2>&1
+/usr/bin/timeout -k 30 -s TERM "${TIMEOUT}" \
+    /bin/sh "${BLOCKCHECK_RUN}" >"${LOG}" 2>&1
 EXIT=$?
 
 # ipfw teardown, log cleanup, and zapret restart all happen in the
