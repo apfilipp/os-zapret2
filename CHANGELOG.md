@@ -7,8 +7,8 @@ All notable changes to os-zapret2 are documented in this file.
 ### Added
 
 - **Per-strategy HTTPS stability test** in Diagnostics. An administrator can
-  paste dvtws2 arguments (or leave the field empty to use the configured HTTPS
-  strategy), resolve every IPv4 address for a domain, and run ten TLS requests
+  paste dvtws2 arguments (or leave the field empty to test direct connectivity
+  without bypass), resolve every IPv4 address for a domain, and run ten requests
   against each address. The test uses an isolated temporary dvtws2 instance
   and a target-specific ipfw rule, reports compact per-address success counts,
   writes a persistent log under `/var/log/zapret`, and leaves the

@@ -627,7 +627,7 @@
                                                 placeholder="--payload=tls_client_hello --lua-desync=..."
                                             ></textarea>
                                             <small class="text-muted">
-                                                {{ lang._('Paste the dvtws2 arguments from blockcheck. Leave empty to test the currently configured HTTPS Strategy. Every resolved IPv4 address is tested 10 times from the firewall itself through an isolated temporary rule; LAN-client routing is not simulated.') }}
+                                                {{ lang._('Paste the dvtws2 arguments from blockcheck. Leave empty to test direct connectivity without any bypass strategy. Every resolved IPv4 address is tested 10 times from the firewall itself through an isolated temporary rule; LAN-client routing is not simulated.') }}
                                             </small>
                                         </td>
                                     </tr>
