@@ -39,8 +39,8 @@ LUA_ANTIDPI="${ZAPRET_DIR}/lua/zapret-antidpi.lua"
 
 # ipfw rule numbers we own. Range 19000-19010 — high enough to avoid
 # OPNsense's own rules, low enough to fire before the default-accept at
-# 65534. We add one rule per configured port (80, 443 by default → two
-# rules: 19000 and 19001).
+# 65534. TCP ports start at 19000; when QUIC is enabled, the next rule
+# diverts UDP/443 (19002 with the default TCP ports 80,443).
 RULE_BASE=19000
 RULE_MAX=$((RULE_BASE + 10))
 
@@ -169,6 +169,24 @@ install_ipfw_rules() {
         rulenum=$((rulenum + 1))
     done
 
+    # QUIC / HTTP3 profile: UDP 443.
+    # Install it only when a QUIC strategy is configured.
+    if [ -n "${QUIC_ARGS}" ]; then
+        if ! /sbin/ipfw -f add ${rulenum} divert ${DIVERT_PORT} udp \
+            from "${src_spec}" to any 443 \
+            out not diverted not sockarg xmit ${wan_dev} >/dev/null 2>&1; then
+            echo "failed to install ipfw QUIC divert rule from '${src_spec}'" >&2
+        fi
+
+        if [ -n "${SOURCE_NETS}" ]; then
+            /sbin/ipfw -qf add ${rulenum} divert ${DIVERT_PORT} udp \
+                from me to any 443 \
+                out not diverted not sockarg xmit ${wan_dev}
+        fi
+
+        rulenum=$((rulenum + 1))
+    fi
+
     IFS="${IFS_SAVED}"
 }
 
@@ -206,22 +224,35 @@ start_service() {
 
     # Build dvtws2 args
     local args="--port=${DIVERT_PORT}"
-    [ -f "${LUA_LIB}" ]      && args="${args} --lua-init=@${LUA_LIB}"
-    [ -f "${LUA_ANTIDPI}" ]  && args="${args} --lua-init=@${LUA_ANTIDPI}"
-    [ -n "${HTTP_ARGS}" ]    && args="${args} ${HTTP_ARGS}"
-    [ -n "${HTTPS_ARGS}" ]   && args="${args} ${HTTPS_ARGS}"
+	[ -f "${LUA_LIB}" ]      && args="${args} --lua-init=@${LUA_LIB}"
+	[ -f "${LUA_ANTIDPI}" ]  && args="${args} --lua-init=@${LUA_ANTIDPI}"
+	
+	# TCP profile: HTTP/HTTPS only.
+	args="${args} --filter-tcp=${PORTS}"
+	[ -n "${HTTP_ARGS}" ]    && args="${args} ${HTTP_ARGS}"
+	[ -n "${HTTPS_ARGS}" ]   && args="${args} ${HTTPS_ARGS}"
+	
+	local hostlist_args=""
 
     if [ "${HOSTLIST_MODE}" = "list" ] && [ -f "${HOSTLIST}" ] && [ -s "${HOSTLIST}" ]; then
-        args="${args} --hostlist=${HOSTLIST}"
+        hostlist_args="${hostlist_args} --hostlist=${HOSTLIST}"
     elif [ "${HOSTLIST_MODE}" = "auto" ]; then
         touch "${AUTOHOSTLIST}" 2>/dev/null
-        args="${args} --hostlist-auto=${AUTOHOSTLIST}"
+        hostlist_args="${hostlist_args} --hostlist-auto=${AUTOHOSTLIST}"
     fi
-
+    
     if [ -f "${HOSTLIST_EXCLUDE}" ] && [ -s "${HOSTLIST_EXCLUDE}" ]; then
-        args="${args} --hostlist-exclude=${HOSTLIST_EXCLUDE}"
+        hostlist_args="${hostlist_args} --hostlist-exclude=${HOSTLIST_EXCLUDE}"
     fi
-
+    
+    # Apply host filtering to the TCP profile.
+    args="${args}${hostlist_args}"
+    
+    # QUIC is a separate UDP profile.
+    if [ -n "${QUIC_ARGS}" ]; then
+        args="${args} --new --filter-udp=443 --filter-l7=quic${hostlist_args} ${QUIC_ARGS}"
+    fi
+    
     [ -n "${EXTRA_ARGS}" ] && args="${args} ${EXTRA_ARGS}"
 
     # Run dvtws2 under daemon(8) -r so a crash auto-restarts within 1s.
