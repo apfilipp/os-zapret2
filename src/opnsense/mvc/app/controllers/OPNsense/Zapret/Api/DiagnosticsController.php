@@ -62,6 +62,14 @@ class DiagnosticsController extends ApiControllerBase
                     'zapret testdomain',
                     [$domain, base64_encode($strategy)]
                 );
+
+                if (!is_string($response) || trim($response) === '') {
+                    return [
+                        'status' => 'error',
+                        'message' => 'Diagnostics backend returned no result. Verify that configd is running and retry.'
+                    ];
+                }
+
                 return ['status' => 'ok', 'result' => $response];
             }
             return ['status' => 'error', 'message' => 'Invalid domain name.'];

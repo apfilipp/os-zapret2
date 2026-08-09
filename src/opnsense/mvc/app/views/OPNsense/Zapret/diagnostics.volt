@@ -443,6 +443,19 @@
                     $("#testDomainBtn").prop("disabled", false);
                     $("#testDomainBtn_progress").removeClass("fa fa-spinner fa-pulse");
 
+                    if (status !== "success" || !data || typeof data.status !== "string") {
+                        var requestStatus = status && status !== "success"
+                            ? " (" + status + ")"
+                            : "";
+
+                        $("#testDomainResult").text(
+                            "Error: diagnostics backend request failed" +
+                            requestStatus +
+                            ". Check that configd is running and retry."
+                        );
+                        return;
+                    }
+
                     if (data.status === 'ok') {
                         $("#testDomainResult").text(data.result);
                     } else {
