@@ -49,6 +49,25 @@ else
     test "$?" -eq 1
 fi
 
+printf '%s\n' \
+    'rawsend_sendto_divert: sendto (648): Permission denied' \
+    'rawsend: sendto_divert: Permission denied' \
+    > "${test_root}/rawsend-denied.log"
+blockcheck_packet_io_denied "${test_root}/rawsend-denied.log"
+
+printf '%s\n' 'reinject sendto: Operation not permitted' \
+    > "${test_root}/reinject-denied.log"
+blockcheck_packet_io_denied "${test_root}/reinject-denied.log"
+
+printf '%s\n' \
+    'ping: sendto: Permission denied' \
+    'curl: (28) Connection timed out after 2000 milliseconds' \
+    > "${test_root}/dns-warning.log"
+if blockcheck_packet_io_denied "${test_root}/dns-warning.log"; then
+    echo 'public DNS warning was misclassified as dvtws2 packet I/O failure' >&2
+    exit 1
+fi
+
 sed 's#^JQ=.*#JQ="/nonexistent/jq"#' "${wrapper}" > "${test_root}/wrapper-no-jq.sh"
 response=$(/bin/sh "${test_root}/wrapper-no-jq.sh")
 printf '%s\n' "${response}" | grep -qF '"status":"error"'

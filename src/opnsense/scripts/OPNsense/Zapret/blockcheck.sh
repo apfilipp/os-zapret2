@@ -237,6 +237,14 @@ zapret_processes_running()
         /usr/bin/pgrep -f '^daemon: zapret2' >/dev/null 2>&1
 }
 
+blockcheck_packet_io_denied()
+{
+    # Do not treat the public-DNS probe's `ping: sendto` warning as a
+    # dvtws2 failure. Only match errors emitted while a divert packet is
+    # being generated or reinjected into the local PF/IPFW stack.
+    grep -Eq '^(rawsend_sendto_divert: sendto \([0-9]+\)|rawsend: sendto_divert|reinject sendto): (Permission denied|Operation not permitted)' "$1"
+}
+
 # cleanup() runs unconditionally on exit (normal exit, SIGTERM from
 # configd timeout, SSH disconnect, ^C). Without this trap, a kill
 # midway through blockcheck2 would leave ipfw enabled AND pf disabled
@@ -509,6 +517,9 @@ fi
     /bin/sh "${BLOCKCHECK_RUN}" >"${LOG}" 2>&1
 EXIT=$?
 
+PACKET_IO_DENIED=0
+blockcheck_packet_io_denied "${LOG}" && PACKET_IO_DENIED=1
+
 # ipfw teardown, log cleanup, and zapret restart all happen in the
 # trap handler installed above — no manual cleanup needed here.
 
@@ -535,17 +546,6 @@ if [ -z "${SUMMARY}" ]; then
     [ -n "${CONFIRMED_WINNERS}" ] && SUMMARY="${SUMMARY}
 ${CONFIRMED_WINNERS}"
 
-    if [ -z "${CONFIRMED_WINNERS}" ]; then
-        "${JQ}" -nc \
-            --arg msg "blockcheck did not produce a summary or any confirmed winners (exit=${EXIT})" \
-            --arg started "${STARTED_ISO}" \
-            --arg finished "${FINISHED_ISO}" \
-            --argjson duration "${DURATION}" \
-            --arg log_file "${LOG}" \
-            --rawfile log "${LOG}" \
-            '{status:"error", message:$msg, started:$started, finished:$finished, duration_seconds:$duration, log_file:$log_file, log:$log[-2000:]}'
-        exit 0
-    fi
 fi
 
 # Current SUMMARY format:
@@ -556,6 +556,32 @@ WINNING=$(printf '%s\n' "${SUMMARY}" \
     | sed -E 's/^[[:space:]]*//' \
     | awk '!seen[$0]++' \
     | head -30)
+
+if [ "${PACKET_IO_DENIED}" = "1" ] && [ -z "${WINNING}" ]; then
+    "${JQ}" -nc \
+        --arg msg "local PF/IPFW stack denied dvtws2 packet injection; blockcheck results are invalid (exit=${EXIT})" \
+        --arg domain "${DOMAIN}" \
+        --arg summary "${SUMMARY}" \
+        --arg started "${STARTED_ISO}" \
+        --arg finished "${FINISHED_ISO}" \
+        --argjson duration "${DURATION}" \
+        --arg log_file "${LOG}" \
+        --rawfile log "${LOG}" \
+        '{status:"error", message:$msg, domain:$domain, started:$started, finished:$finished, duration_seconds:$duration, log_file:$log_file, summary:$summary, log:$log[-2000:]}'
+    exit 0
+fi
+
+if [ "${PARTIAL}" = "1" ] && [ -z "${WINNING}" ]; then
+    "${JQ}" -nc \
+        --arg msg "blockcheck did not produce a summary or any confirmed winners (exit=${EXIT})" \
+        --arg started "${STARTED_ISO}" \
+        --arg finished "${FINISHED_ISO}" \
+        --argjson duration "${DURATION}" \
+        --arg log_file "${LOG}" \
+        --rawfile log "${LOG}" \
+        '{status:"error", message:$msg, started:$started, finished:$finished, duration_seconds:$duration, log_file:$log_file, log:$log[-2000:]}'
+    exit 0
+fi
 
 "${JQ}" -nc \
     --arg domain "${DOMAIN}" \
