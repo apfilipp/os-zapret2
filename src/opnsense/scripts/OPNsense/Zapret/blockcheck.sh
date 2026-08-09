@@ -120,15 +120,6 @@ if [ -x /usr/local/bin/jq ]; then
 fi
 [ -z "${WAN_DEV}" ] && WAN_DEV="${WAN_IF}"
 
-# blockcheck2 refuses to run reliably while another DPI bypass is active.
-# Stop zapret if it's running — we'll restart it on exit if it was.
-WAS_RUNNING=0
-if [ -f /var/run/dvtws2.pid ] && kill -0 "$(cat /var/run/dvtws2.pid)" 2>/dev/null; then
-    WAS_RUNNING=1
-    /usr/local/sbin/configctl zapret stop >/dev/null 2>&1
-    sleep 2
-fi
-
 # blockcheck2 wants ipfw enabled to install its own divert rules. Save
 # the previous state so the trap can restore exactly what we found.
 #
@@ -156,6 +147,15 @@ WAS_IPFW_LOADED=0
 /sbin/kldstat -q -m ipfw && WAS_IPFW_LOADED=1
 PREV_IPFW=$(/sbin/sysctl -n net.inet.ip.fw.enable 2>/dev/null || echo 0)
 PREV_IPFW6=$(/sbin/sysctl -n net.inet6.ip6.fw.enable 2>/dev/null || echo 0)
+
+# blockcheck2 refuses to run reliably while another DPI bypass is active.
+# Stop zapret if it's running — we'll restart it on exit if it was.
+WAS_RUNNING=0
+if [ -f /var/run/dvtws2.pid ] && kill -0 "$(cat /var/run/dvtws2.pid)" 2>/dev/null; then
+    WAS_RUNNING=1
+    /usr/local/sbin/configctl zapret stop >/dev/null 2>&1
+    sleep 2
+fi
 
 # cleanup() runs unconditionally on exit (normal exit, SIGTERM from
 # configd timeout, SSH disconnect, ^C). Without this trap, a kill

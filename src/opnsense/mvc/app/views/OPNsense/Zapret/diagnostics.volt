@@ -66,6 +66,10 @@
         function renderRunningBlockcheck(data) {
             $("#blockcheckBtn").prop("disabled", true);
             $("#blockcheckBtn_progress").addClass("fa fa-spinner fa-pulse");
+			
+			$("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+			$("#blockcheckStopBtn").prop("disabled", false).show();
+
 
             var html = "";
 
@@ -146,11 +150,45 @@
             scheduleBlockcheckPoll(2000);
         }
 
+		function renderStoppedBlockcheck(data) {
+			stopBlockcheckPolling();
+		
+			$("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
+			$("#blockcheckBtn").prop("disabled", false);
+		
+			$("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+			$("#blockcheckStopBtn").prop("disabled", false).hide();
+		
+			var html = '<span class="text-warning"><strong>Blockcheck stopped</strong></span>';
+		
+			if (data.domain) {
+				html += '<br>Domain: <strong>' +
+					blockcheckEscape(data.domain) +
+					'</strong>';
+			}
+		
+			if (data.elapsed_seconds !== undefined) {
+				html += '<br>Elapsed: ' +
+					blockcheckEscape(blockcheckDuration(data.elapsed_seconds));
+			}
+		
+			if (data.log_file) {
+				html += '<br><small class="text-muted">Full log: <code>' +
+					blockcheckEscape(data.log_file) +
+					'</code></small>';
+			}
+		
+			$("#blockcheckSummary").html(html);
+		}
+
         function renderFinishedBlockcheck(data) {
             stopBlockcheckPolling();
 
             $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
             $("#blockcheckBtn").prop("disabled", false);
+
+            $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+            $("#blockcheckStopBtn").prop("disabled", false).hide();
 
             var result = data.result || {};
             var duration = result.duration_seconds;
@@ -264,6 +302,37 @@
             $("#blockcheckRaw").text(result.summary || result.log || '');
         }
 
+		function renderStoppedBlockcheck(data) {
+			stopBlockcheckPolling();
+
+            $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
+            $("#blockcheckBtn").prop("disabled", false);
+
+            $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+            $("#blockcheckStopBtn").prop("disabled", false).hide();
+
+            var html = '<span class="text-warning"><strong>Blockcheck stopped</strong></span>';
+
+            if (data.domain) {
+                html += '<br>Domain: <strong>' +
+                    blockcheckEscape(data.domain) +
+                    '</strong>';
+            }
+
+            if (data.elapsed_seconds !== undefined) {
+                html += '<br>Elapsed: ' +
+                    blockcheckEscape(blockcheckDuration(data.elapsed_seconds));
+            }
+
+            if (data.log_file) {
+                html += '<br><small class="text-muted">Full log: <code>' +
+                    blockcheckEscape(data.log_file) +
+                    '</code></small>';
+            }
+
+            $("#blockcheckSummary").html(html);
+        }
+
         function renderBlockcheckStatus(data) {
             if (!data) {
                 return;
@@ -275,7 +344,10 @@
                 $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
                 $("#blockcheckBtn").prop("disabled", false);
 
-                $("#blockcheckSummary").html(
+				$("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+				$("#blockcheckStopBtn").prop("disabled", false).hide();
+
+				$("#blockcheckSummary").html(
                     '<span class="text-danger">' +
                     blockcheckEscape(data.message || "Blockcheck status error") +
                     '</span>'
@@ -294,11 +366,19 @@
                 return;
             }
 
+            if (data.state === "stopped") {
+				renderStoppedBlockcheck(data);
+				return;
+			}
+
             if (data.state === "idle") {
                 stopBlockcheckPolling();
                 $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
                 $("#blockcheckBtn").prop("disabled", false);
-            }
+            
+				$("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+				$("#blockcheckStopBtn").prop("disabled", false).hide();
+			}
         }
 
         function pollBlockcheck() {
@@ -388,8 +468,8 @@
                 blockcheckEscape(domain) +
                 '</strong>...</em>'
             );
-            $("#blockcheckWinning").html('');
-            $("#blockcheckRaw").text('');
+            $("#blockcheckWinning").empty().removeData("renderedHtml");
+			$("#blockcheckRaw").text('');
 
             $.ajax({
                 type: "POST",
@@ -426,6 +506,51 @@
 
                     $("#blockcheckSummary").html(
                         '<span class="text-danger">Request failed: ' +
+                        blockcheckEscape(textStatus) +
+                        '</span>'
+                    );
+                }
+            });
+        });
+
+        $("#blockcheckStopBtn").click(function() {
+            $("#blockcheckStopBtn").prop("disabled", true);
+            $("#blockcheckStopBtn_progress").addClass("fa fa-spinner fa-pulse");
+
+            $("#blockcheckSummary").append(
+                '<br><em>Stopping blockcheck...</em>'
+            );
+
+            $.ajax({
+                type: "POST",
+                url: "/api/zapret/diagnostics/blockcheckstop",
+                dataType: "json",
+                timeout: 10000,
+
+                success: function(data) {
+                    if (data && data.status === "ok") {
+                        scheduleBlockcheckPoll(500);
+                        return;
+                    }
+
+                    $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+                    $("#blockcheckStopBtn").prop("disabled", false);
+
+                    $("#blockcheckSummary").append(
+                        '<br><span class="text-danger">' +
+                        blockcheckEscape(
+                            (data && data.message) || "Unable to stop blockcheck"
+                        ) +
+                        '</span>'
+                    );
+                },
+
+                error: function(jqXHR, textStatus) {
+                    $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+                    $("#blockcheckStopBtn").prop("disabled", false);
+
+                    $("#blockcheckSummary").append(
+                        '<br><span class="text-danger">Stop request failed: ' +
                         blockcheckEscape(textStatus) +
                         '</span>'
                     );
@@ -532,16 +657,26 @@
 											</div>
                                         </td>
 
-                                        <td style="width: 150px;">
-                                            <button
-                                                class="btn btn-primary"
-                                                id="blockcheckBtn"
-                                                type="button"
-                                            >
-                                                {{ lang._('Run') }}
-                                                <i id="blockcheckBtn_progress"></i>
-                                            </button>
-                                        </td>
+                                        <td style="width: 220px;">
+											<button
+												class="btn btn-primary"
+												id="blockcheckBtn"
+												type="button"
+											>
+												{{ lang._('Run') }}
+												<i id="blockcheckBtn_progress"></i>
+											</button>
+										
+											<button
+												class="btn btn-danger"
+												id="blockcheckStopBtn"
+												type="button"
+												style="display:none; margin-left:5px;"
+											>
+												{{ lang._('Stop') }}
+												<i id="blockcheckStopBtn_progress"></i>
+											</button>
+										</td>
                                     </tr>
                                 </tbody>
                             </table>

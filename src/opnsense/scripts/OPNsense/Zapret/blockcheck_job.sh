@@ -6,6 +6,7 @@ BLOCKCHECK="/usr/local/opnsense/scripts/OPNsense/Zapret/blockcheck.sh"
 PIDFILE="/var/run/zapret-blockcheck.pid"
 RESULT="/var/run/zapret-blockcheck.result"
 META="/var/run/zapret-blockcheck.meta"
+STOPFILE="/var/run/zapret-blockcheck.stop"
 LOG_DIR="/var/log/zapret"
 
 ACTION="$1"
@@ -49,8 +50,7 @@ case "${ACTION}" in
             exit 0
         fi
 
-        rm -f "${RESULT}" "${META}"
-
+		rm -f "${RESULT}" "${META}" "${STOPFILE}"
         started=$(date -u +%s)
 
         {
@@ -69,6 +69,44 @@ case "${ACTION}" in
             '{status:"ok", state:"started", domain:$domain, started_epoch:$started}'
         ;;
 
+    stop)
+        if [ ! -f "${META}" ]; then
+            echo '{"status":"ok","state":"idle"}'
+            exit 0
+        fi
+
+        domain=$(sed -n '1p' "${META}")
+        started=$(sed -n '2p' "${META}")
+
+        if ! is_running; then
+            /usr/local/bin/jq -nc \
+                --arg domain "${domain}" \
+                '{status:"ok", state:"stopped", domain:$domain}'
+            exit 0
+        fi
+
+        pid=$(cat "${PIDFILE}" 2>/dev/null)
+        pgid=$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d '[:space:]')
+
+        case "${pgid}" in
+            ''|*[!0-9]*)
+                echo '{"status":"error","message":"could not determine blockcheck process group"}'
+                exit 0
+                ;;
+        esac
+
+        date -u +%s > "${STOPFILE}"
+
+        if ! /bin/kill -TERM "-${pgid}" 2>/dev/null; then
+            echo '{"status":"error","message":"could not stop blockcheck process group"}'
+            exit 0
+        fi
+
+        /usr/local/bin/jq -nc \
+            --arg domain "${domain}" \
+            '{status:"ok", state:"stopping", domain:$domain}'
+        ;;
+
     status)
         if [ ! -f "${META}" ]; then
             echo '{"status":"ok","state":"idle"}'
@@ -81,9 +119,19 @@ case "${ACTION}" in
         elapsed=$((now - started))
 
         log_domain=$(printf '%s' "${domain}" | tr -c 'a-zA-Z0-9.-' '_')
-        log_file=$(ls -1t "${LOG_DIR}"/blockcheck-*-"${log_domain}".log 2>/dev/null | head -1)
-
-        if is_running; then
+		log_file=$(ls -1t "${LOG_DIR}"/blockcheck-*-"${log_domain}".log 2>/dev/null | head -1)
+		
+		# Immediately after a new run starts, the new log may not exist yet.
+		# Do not accidentally expose results from the previous run.
+		if [ -n "${log_file}" ] && [ -f "${log_file}" ]; then
+			log_mtime=$(/usr/bin/stat -f '%m' "${log_file}" 2>/dev/null || echo 0)
+		
+			if [ "${log_mtime}" -lt "${started}" ]; then
+				log_file=""
+			fi
+		fi
+		
+		if is_running; then
             stage=""
             attempts=0
             winners=""
@@ -97,11 +145,12 @@ case "${ACTION}" in
         		candidate=$0
        		        next
     		}
-    /^[[:space:]]*!!!!! AVAILABLE !!!!!/ && candidate != "" {
-        print candidate
-        candidate=""
-    }
-' "${log_file}" 2>/dev/null)
+	    
+	        /^[[:space:]]*!!!!! AVAILABLE !!!!!/ && candidate != "" {
+        	    print candidate
+        	    candidate=""
+    	  	}
+		' "${log_file}" 2>/dev/null)
                 tail_output=$(tail -20 "${log_file}" 2>/dev/null)
             fi
 
@@ -136,28 +185,53 @@ case "${ACTION}" in
             exit 0
         fi
 
-        if [ -s "${RESULT}" ]; then
+	if [ -f "${STOPFILE}" ]; then
             /usr/local/bin/jq -nc \
                 --arg domain "${domain}" \
-                --argjson elapsed "${elapsed}" \
-                --slurpfile result "${RESULT}" \
-                '{
+            	--arg log_file "${log_file}" \
+            	--argjson elapsed "${elapsed}" \
+            	'{
                     status:"ok",
-                    state:"finished",
+                    state:"stopped",
                     domain:$domain,
                     elapsed_seconds:$elapsed,
-                    result:($result[0] // null)
-                }'
+                    log_file:$log_file
+            	}'
+            exit 0
+    	fi
+
+        if [ -s "${RESULT}" ]; then
+            result_json=$(awk '/^[[:space:]]*\{/ {line=$0} END {print line}' "${RESULT}")
+
+            if [ -n "${result_json}" ] && \
+               printf '%s\n' "${result_json}" | /usr/local/bin/jq -e . >/dev/null 2>&1; then
+                /usr/local/bin/jq -nc \
+                    --arg domain "${domain}" \
+                    --argjson elapsed "${elapsed}" \
+                    --argjson result "${result_json}" \
+                    '{
+                        status:"ok",
+                        state:"finished",
+                        domain:$domain,
+                        elapsed_seconds:$elapsed,
+                        result:$result
+                    }'
+            else
+                /usr/local/bin/jq -nc \
+                    --arg domain "${domain}" \
+                    --argjson elapsed "${elapsed}" \
+                    '{status:"error", state:"finished", domain:$domain, elapsed_seconds:$elapsed, message:"blockcheck finished without valid result"}'
+            fi
         else
             /usr/local/bin/jq -nc \
                 --arg domain "${domain}" \
                 --argjson elapsed "${elapsed}" \
                 '{status:"error", state:"finished", domain:$domain, elapsed_seconds:$elapsed, message:"blockcheck finished without result"}'
         fi
-        ;;
+	;;
 
     *)
-        echo '{"status":"error","message":"usage: blockcheck_job.sh start <domain> | status"}'
+	echo '{"status":"error","message":"usage: blockcheck_job.sh start <domain> [mode] | status | stop"}'
         ;;
 esac
 

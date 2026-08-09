@@ -96,4 +96,24 @@ class DiagnosticsController extends ApiControllerBase
             'message' => 'Invalid response from blockcheck status.'
         ];
     }
+
+    public function blockcheckstopAction()
+    {
+        if ($this->request->isPost()) {
+            $backend = new \OPNsense\Core\Backend();
+            $response = $backend->configdpRun('zapret blockcheck_stop');
+
+            $result = json_decode($response, true);
+            if (is_array($result)) {
+                return $result;
+            }
+
+            return [
+                'status' => 'error',
+                'message' => 'Invalid response from blockcheck stop.'
+            ];
+        }
+
+        return ['status' => 'error', 'message' => 'POST required.'];
+    }
 }
