@@ -50,30 +50,50 @@ class DiagnosticsController extends ApiControllerBase
         return ['status' => 'error', 'message' => 'POST required.'];
     }
 
-    /**
-     * Run blockcheck against a domain. blockcheck2 takes 1–3 minutes, which
-     * exceeds PHP's default max_execution_time (30s) and our configdpRun
-     * call would otherwise be killed mid-flight, returning an empty body to
-     * the caller. We bump both before invoking configd.
-     * @return array result
-     */
     public function blockcheckAction()
     {
         if ($this->request->isPost()) {
             $domain = $this->request->getPost('domain', 'striptags', '');
-            if (!empty($domain) && preg_match('/^[a-zA-Z0-9\.\-]+$/', $domain)) {
-                // 10 minutes — match the wrapper's internal timeout. set_time_limit
-                // resets the PHP execution clock from "now"; without it, the request
-                // dies at 30s and the user sees "Unstructured output: (empty)".
-                @set_time_limit(700);
+	    $mode = $this->request->getPost('mode', 'striptags', 'all');
+
+	    if (!in_array($mode, ['http', 'tls12', 'tls13', 'http3', 'all'], true)) {
+    		$mode = 'all';
+	    }
+            
+	    if (!empty($domain) && preg_match('/^[a-zA-Z0-9.-]+$/', $domain)) {
                 $backend = new \OPNsense\Core\Backend();
-                // configdpRun signature: ($event, $params, $detach, $timeout, $connect_timeout)
-                // Default timeout is 120s — too short for blockcheck. Pass 650.
-                $response = $backend->configdpRun('zapret blockcheck', [$domain], false, 650);
-                return ['status' => 'ok', 'result' => $response];
+                $response = $backend->configdpRun('zapret blockcheck_start', [$domain, $mode]);
+
+                $result = json_decode($response, true);
+                if (is_array($result)) {
+                    return $result;
+                }
+
+                return [
+                    'status' => 'error',
+                    'message' => 'Invalid response from blockcheck launcher.'
+                ];
             }
+
             return ['status' => 'error', 'message' => 'Invalid domain name.'];
         }
+
         return ['status' => 'error', 'message' => 'POST required.'];
+    }
+
+    public function blockcheckstatusAction()
+    {
+        $backend = new \OPNsense\Core\Backend();
+        $response = $backend->configdpRun('zapret blockcheck_status');
+
+        $result = json_decode($response, true);
+        if (is_array($result)) {
+            return $result;
+        }
+
+        return [
+            'status' => 'error',
+            'message' => 'Invalid response from blockcheck status.'
+        ];
     }
 }

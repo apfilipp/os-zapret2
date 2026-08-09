@@ -1,4 +1,5 @@
-#!/bin/sh
+cp src/opnsense/scripts/OPNsense/Zapret/blockcheck.sh /usr/local/opnsense/scripts/OPNsense/Zapret/blockcheck.sh
+configctl zapret blockcheck_start youtube.com tls13#!/bin/sh
 
 # blockcheck.sh — Non-interactive driver for upstream zapret2's blockcheck2.sh
 #
@@ -25,6 +26,47 @@ CONFIG="${ZAPRET_DIR}/zapret.conf"
 TIMEOUT="${BLOCKCHECK_TIMEOUT:-1500}"
 
 DOMAIN="$1"
+
+MODE="${2:-all}"
+
+case "${MODE}" in
+    tls13)
+        BC_HTTP=0
+        BC_TLS12=0
+        BC_TLS13=1
+        BC_HTTP3=0
+        ;;
+    tls12)
+        BC_HTTP=0
+        BC_TLS12=1
+        BC_TLS13=0
+        BC_HTTP3=0
+        ;;
+    http)
+        BC_HTTP=1
+        BC_TLS12=0
+        BC_TLS13=0
+        BC_HTTP3=0
+        ;;
+    http3)
+        BC_HTTP=0
+        BC_TLS12=0
+        BC_TLS13=0
+        BC_HTTP3=1
+        ;;
+    all)
+        BC_HTTP=1
+        BC_TLS12=1
+        BC_TLS13=1
+        BC_HTTP3=1
+        ;;
+    *)
+        BC_HTTP=1
+        BC_TLS12=1
+        BC_TLS13=1
+        BC_HTTP3=1
+        ;;
+esac
 
 # Wall-clock timestamps for the JSON output. ISO-8601 UTC for human
 # readability; epoch for cheap duration math. We capture STARTED at
@@ -148,6 +190,7 @@ cleanup() {
     [ "${WAS_IPFW_LOADED}" = "0" ] && /sbin/kldunload ipfw 2>/dev/null
 
     # Bring zapret back if it was running
+    [ -n "${BLOCKCHECK_TMP}" ] && rm -f "${BLOCKCHECK_TMP}"
     [ "${WAS_RUNNING}" = "1" ] && /usr/local/sbin/configctl zapret start >/dev/null 2>&1
     # Note: we deliberately do NOT delete ${LOG} here. It lives at
     # /var/log/zapret/blockcheck-*.log and is part of the persistent
@@ -166,6 +209,30 @@ trap cleanup EXIT INT TERM HUP
 
 /sbin/sysctl net.inet.ip.fw.enable=1   >/dev/null 2>&1
 /sbin/sysctl net.inet6.ip6.fw.enable=1 >/dev/null 2>&1
+
+# OPNsense must keep pf enabled while blockcheck runs.
+# Put ipfw ahead of pf in the pfil chain, then run a temporary copy of
+# upstream blockcheck2.sh with its per-test "pfctl -qd" disabled.
+BLOCKCHECK_RUN="${BLOCKCHECK}"
+BLOCKCHECK_TMP=""
+
+if [ -f /usr/local/opnsense/version/core ]; then
+    /sbin/pfctl -d >/dev/null 2>&1
+    /sbin/pfctl -e >/dev/null 2>&1
+
+    BLOCKCHECK_TMP="/tmp/blockcheck2-opnsense.$$"
+    sed \
+        -e 's/pf_is_avail && pfctl -qd/: # OPNsense: keep pf enabled/' \
+	-e 's|"$DVTWS2" --port=$IPFW_DIVERT_PORT |"$DVTWS2" --port=$IPFW_DIVERT_PORT --sockarg=0x200 --user=nobody |' \
+        -e 's|out not diverted$|out not diverted not sockarg xmit $IFACE_WAN|' \
+	-e 's|IPFW_ADD divert $IPFW_DIVERT_PORT tcp from $ip $1 to me proto ip${IPV} tcpflags syn,ack in not diverted|: # OPNsense: do not divert inbound SYN+ACK|' \
+        "${BLOCKCHECK}" > "${BLOCKCHECK_TMP}" || {
+        emit_error "could not prepare OPNsense blockcheck wrapper"
+        exit 0
+    }
+    chmod 700 "${BLOCKCHECK_TMP}"
+    BLOCKCHECK_RUN="${BLOCKCHECK_TMP}"
+fi
 
 # Persistent per-run log so the user can review the full blockcheck2
 # output after the fact (the JSON-embedded log field is truncated to
@@ -200,20 +267,26 @@ ls -1t "${LOG_DIR}"/blockcheck-*.log 2>/dev/null | tail -n +51 | xargs rm -f 2>/
 # requested domain means the user can never silently get rutracker
 # results when they asked for something else.
 cd "${ZAPRET_DIR}"
-env \
-    BATCH=1 \
-    IFACE_WAN="${WAN_DEV}" \
-    DOMAINS="${DOMAIN}" \
-    DOMAINS_DEFAULT="${DOMAIN}" \
-    IPVS=4 \
-    ENABLE_HTTP=1 \
-    ENABLE_HTTPS_TLS12=1 \
-    ENABLE_HTTPS_TLS13=1 \
-    ENABLE_HTTP3=0 \
-    REPEATS=1 \
-    PARALLEL=0 \
-    SCANLEVEL=standard \
-    /usr/bin/timeout ${TIMEOUT} /bin/sh "${BLOCKCHECK}" >"${LOG}" 2>&1
+
+ZAPRET_BASE="${ZAPRET_DIR}"
+BATCH=1
+IFACE_WAN="${WAN_DEV}"
+DOMAINS="${DOMAIN}"
+DOMAINS_DEFAULT="${DOMAIN}"
+IPVS=4
+ENABLE_HTTP="${BC_HTTP}"
+ENABLE_HTTPS_TLS12="${BC_TLS12}"
+ENABLE_HTTPS_TLS13="${BC_TLS13}"
+ENABLE_HTTP3="${BC_HTTP3}"
+REPEATS=1
+PARALLEL=0
+SCANLEVEL=standard
+
+export ZAPRET_BASE BATCH IFACE_WAN DOMAINS DOMAINS_DEFAULT IPVS
+export ENABLE_HTTP ENABLE_HTTPS_TLS12 ENABLE_HTTPS_TLS13 ENABLE_HTTP3
+export REPEATS PARALLEL SCANLEVEL
+
+/usr/bin/timeout ${TIMEOUT} /bin/sh "${BLOCKCHECK_RUN}" >"${LOG}" 2>&1
 EXIT=$?
 
 # ipfw teardown, log cleanup, and zapret restart all happen in the
