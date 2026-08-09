@@ -1,5 +1,4 @@
-cp src/opnsense/scripts/OPNsense/Zapret/blockcheck.sh /usr/local/opnsense/scripts/OPNsense/Zapret/blockcheck.sh
-configctl zapret blockcheck_start youtube.com tls13#!/bin/sh
+#!/bin/sh
 
 # blockcheck.sh — Non-interactive driver for upstream zapret2's blockcheck2.sh
 #
