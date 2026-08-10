@@ -81,13 +81,13 @@ class DiagnosticsController extends ApiControllerBase
     {
         if ($this->request->isPost()) {
             $domain = $this->request->getPost('domain', 'striptags', '');
-	    $mode = $this->request->getPost('mode', 'striptags', 'all');
+            $mode = $this->request->getPost('mode', 'striptags', 'all');
 
-	    if (!in_array($mode, ['http', 'tls12', 'tls13', 'http3', 'all'], true)) {
-    		$mode = 'all';
-	    }
-            
-	    if (!empty($domain) && preg_match('/^[a-zA-Z0-9.-]+$/', $domain)) {
+            if (!in_array($mode, ['http', 'tls12', 'tls13', 'http3', 'all'], true)) {
+                $mode = 'all';
+            }
+
+            if (!empty($domain) && preg_match('/^[a-zA-Z0-9.-]+$/', $domain)) {
                 $backend = new \OPNsense\Core\Backend();
                 $response = $backend->configdpRun('zapret blockcheck_start', [$domain, $mode]);
 

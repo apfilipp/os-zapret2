@@ -66,9 +66,9 @@
         function renderRunningBlockcheck(data) {
             $("#blockcheckBtn").prop("disabled", true);
             $("#blockcheckBtn_progress").addClass("fa fa-spinner fa-pulse");
-			
-			$("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
-			$("#blockcheckStopBtn").prop("disabled", false).show();
+
+            $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+            $("#blockcheckStopBtn").prop("disabled", false).show();
 
 
             var html = "";
@@ -138,10 +138,10 @@
 
             var $winning = $("#blockcheckWinning");
 
-			if ($winning.data("renderedHtml") !== winnersHtml) {
-				$winning.html(winnersHtml);
-				$winning.data("renderedHtml", winnersHtml);
-			}
+            if ($winning.data("renderedHtml") !== winnersHtml) {
+                $winning.html(winnersHtml);
+                $winning.data("renderedHtml", winnersHtml);
+            }
 
             if (data.tail) {
                 $("#blockcheckRaw").text(data.tail);
@@ -150,36 +150,36 @@
             scheduleBlockcheckPoll(2000);
         }
 
-		function renderStoppedBlockcheck(data) {
-			stopBlockcheckPolling();
-		
-			$("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
-			$("#blockcheckBtn").prop("disabled", false);
-		
-			$("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
-			$("#blockcheckStopBtn").prop("disabled", false).hide();
-		
-			var html = '<span class="text-warning"><strong>Blockcheck stopped</strong></span>';
-		
-			if (data.domain) {
-				html += '<br>Domain: <strong>' +
-					blockcheckEscape(data.domain) +
-					'</strong>';
-			}
-		
-			if (data.elapsed_seconds !== undefined) {
-				html += '<br>Elapsed: ' +
-					blockcheckEscape(blockcheckDuration(data.elapsed_seconds));
-			}
-		
-			if (data.log_file) {
-				html += '<br><small class="text-muted">Full log: <code>' +
-					blockcheckEscape(data.log_file) +
-					'</code></small>';
-			}
-		
-			$("#blockcheckSummary").html(html);
-		}
+        function renderStoppedBlockcheck(data) {
+            stopBlockcheckPolling();
+
+            $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
+            $("#blockcheckBtn").prop("disabled", false);
+
+            $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+            $("#blockcheckStopBtn").prop("disabled", false).hide();
+
+            var html = '<span class="text-warning"><strong>Blockcheck stopped</strong></span>';
+
+            if (data.domain) {
+                html += '<br>Domain: <strong>' +
+                    blockcheckEscape(data.domain) +
+                    '</strong>';
+            }
+
+            if (data.elapsed_seconds !== undefined) {
+                html += '<br>Elapsed: ' +
+                    blockcheckEscape(blockcheckDuration(data.elapsed_seconds));
+            }
+
+            if (data.log_file) {
+                html += '<br><small class="text-muted">Full log: <code>' +
+                    blockcheckEscape(data.log_file) +
+                    '</code></small>';
+            }
+
+            $("#blockcheckSummary").html(html);
+        }
 
         function renderFinishedBlockcheck(data) {
             stopBlockcheckPolling();
@@ -302,8 +302,8 @@
             $("#blockcheckRaw").text(result.summary || result.log || '');
         }
 
-		function renderStoppedBlockcheck(data) {
-			stopBlockcheckPolling();
+        function renderStoppedBlockcheck(data) {
+            stopBlockcheckPolling();
 
             $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
             $("#blockcheckBtn").prop("disabled", false);
@@ -344,10 +344,10 @@
                 $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
                 $("#blockcheckBtn").prop("disabled", false);
 
-				$("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
-				$("#blockcheckStopBtn").prop("disabled", false).hide();
+                $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+                $("#blockcheckStopBtn").prop("disabled", false).hide();
 
-				$("#blockcheckSummary").html(
+                $("#blockcheckSummary").html(
                     '<span class="text-danger">' +
                     blockcheckEscape(data.message || "Blockcheck status error") +
                     '</span>'
@@ -367,18 +367,18 @@
             }
 
             if (data.state === "stopped") {
-				renderStoppedBlockcheck(data);
-				return;
-			}
+                renderStoppedBlockcheck(data);
+                return;
+            }
 
             if (data.state === "idle") {
                 stopBlockcheckPolling();
                 $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
                 $("#blockcheckBtn").prop("disabled", false);
-            
-				$("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
-				$("#blockcheckStopBtn").prop("disabled", false).hide();
-			}
+
+                $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+                $("#blockcheckStopBtn").prop("disabled", false).hide();
+            }
         }
 
         function pollBlockcheck() {
@@ -470,7 +470,7 @@
         // ---- Blockcheck (Strategy Finder) ----
         $("#blockcheckBtn").click(function() {
             var domain = $("#blockcheckDomainInput").val().trim();
-			var mode = $("#blockcheckMode").val();
+            var mode = $("#blockcheckMode").val();
             if (!domain) {
                 BootstrapDialog.show({
                     type: BootstrapDialog.TYPE_WARNING,
@@ -490,15 +490,15 @@
                 '</strong>...</em>'
             );
             $("#blockcheckWinning").empty().removeData("renderedHtml");
-			$("#blockcheckRaw").text('');
+            $("#blockcheckRaw").text('');
 
             $.ajax({
                 type: "POST",
                 url: "/api/zapret/diagnostics/blockcheck",
                 data: {
-					'domain': domain,
-					'mode': mode
-				},
+                    'domain': domain,
+                    'mode': mode
+                },
                 dataType: "json",
                 timeout: 10000,
 
@@ -685,37 +685,37 @@
                                                 id="blockcheckDomainInput"
                                                 placeholder="rutracker.org"
                                             />
-											<div style="margin-top: 8px;">
-												<select class="form-control" id="blockcheckMode">
-													<option value="tls13" selected>TLS 1.3 (HTTPS / TCP 443)</option>
-													<option value="tls12">TLS 1.2 (HTTPS / TCP 443)</option>
-													<option value="http3">HTTP/3 (QUIC / UDP 443)</option>
-													<option value="http">HTTP (TCP 80)</option>
-													<option value="all">All protocols</option>
-												</select>
-											</div>
+                                            <div style="margin-top: 8px;">
+                                                <select class="form-control" id="blockcheckMode">
+                                                    <option value="tls13" selected>TLS 1.3 (HTTPS / TCP 443)</option>
+                                                    <option value="tls12">TLS 1.2 (HTTPS / TCP 443)</option>
+                                                    <option value="http3">HTTP/3 (QUIC / UDP 443)</option>
+                                                    <option value="http">HTTP (TCP 80)</option>
+                                                    <option value="all">All protocols</option>
+                                                </select>
+                                            </div>
                                         </td>
 
                                         <td style="width: 220px;">
-											<button
-												class="btn btn-primary"
-												id="blockcheckBtn"
-												type="button"
-											>
-												{{ lang._('Run') }}
-												<i id="blockcheckBtn_progress"></i>
-											</button>
-										
-											<button
-												class="btn btn-danger"
-												id="blockcheckStopBtn"
-												type="button"
-												style="display:none; margin-left:5px;"
-											>
-												{{ lang._('Stop') }}
-												<i id="blockcheckStopBtn_progress"></i>
-											</button>
-										</td>
+                                            <button
+                                                class="btn btn-primary"
+                                                id="blockcheckBtn"
+                                                type="button"
+                                            >
+                                                {{ lang._('Run') }}
+                                                <i id="blockcheckBtn_progress"></i>
+                                            </button>
+
+                                            <button
+                                                class="btn btn-danger"
+                                                id="blockcheckStopBtn"
+                                                type="button"
+                                                style="display:none; margin-left:5px;"
+                                            >
+                                                {{ lang._('Stop') }}
+                                                <i id="blockcheckStopBtn_progress"></i>
+                                            </button>
+                                        </td>
                                     </tr>
                                 </tbody>
                             </table>

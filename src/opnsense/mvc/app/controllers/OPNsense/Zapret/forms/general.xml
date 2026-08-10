@@ -70,7 +70,7 @@
             Paste the part after <code>dvtws2</code> from a <code>curl_test_https_tls12</code> line in the SUMMARY.<br/>
             Example: <code>--payload=tls_client_hello --lua-desync=fake:blob=fake_default_tls:ip_autottl=-4,3-20:repeats=1</code>]]></help>
     </field>
-	<field>
+    <field>
         <id>zapret.strategy.quicargs</id>
         <label>QUIC Strategy</label>
         <type>text</type>

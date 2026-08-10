@@ -284,19 +284,19 @@ case "${ACTION}" in
         fi
 
         log_domain=$(printf '%s' "${domain}" | tr -c 'a-zA-Z0-9.-' '_')
-		log_file=$(ls -1t "${LOG_DIR}"/blockcheck-*-"${log_domain}".log 2>/dev/null | head -1)
-		
-		# Immediately after a new run starts, the new log may not exist yet.
-		# Do not accidentally expose results from the previous run.
-		if [ -n "${log_file}" ] && [ -f "${log_file}" ]; then
-			log_mtime=$(/usr/bin/stat -f '%m' "${log_file}" 2>/dev/null || echo 0)
-		
-			if [ "${log_mtime}" -lt "${started}" ]; then
-				log_file=""
-			fi
-		fi
-		
-		if is_running; then
+        log_file=$(ls -1t "${LOG_DIR}"/blockcheck-*-"${log_domain}".log 2>/dev/null | head -1)
+
+        # Immediately after a new run starts, the new log may not exist yet.
+        # Do not accidentally expose results from the previous run.
+        if [ -n "${log_file}" ] && [ -f "${log_file}" ]; then
+            log_mtime=$(/usr/bin/stat -f '%m' "${log_file}" 2>/dev/null || echo 0)
+
+            if [ "${log_mtime}" -lt "${started}" ]; then
+                log_file=""
+            fi
+        fi
+
+        if is_running; then
             stage=""
             attempts=0
             winners=""
@@ -401,10 +401,10 @@ case "${ACTION}" in
                 --argjson elapsed "${elapsed}" \
                 '{status:"error", state:"finished", domain:$domain, elapsed_seconds:$elapsed, message:"blockcheck finished without result"}'
         fi
-	;;
+    ;;
 
     *)
-	echo '{"status":"error","message":"usage: blockcheck_job.sh start <domain> [mode] | status | stop"}'
+    echo '{"status":"error","message":"usage: blockcheck_job.sh start <domain> [mode] | status | stop"}'
         ;;
 esac
 

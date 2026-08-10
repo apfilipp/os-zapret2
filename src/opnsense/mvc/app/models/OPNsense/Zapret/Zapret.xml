@@ -40,7 +40,7 @@
             <httpsargs type="TextField">
                 <Required>N</Required>
             </httpsargs>
-			<quicargs type="TextField">
+            <quicargs type="TextField">
                 <Required>N</Required>
             </quicargs>
             <extraargs type="TextField">
