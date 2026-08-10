@@ -32,10 +32,12 @@ jobs:
           find pkg -type f -exec sh -n {} \;
           find scripts -name "*.sh" -exec sh -n {} \;
 
-      - name: Test blockcheck helpers
+      - name: Test diagnostics and firewall helpers
         run: |
           sh tests/blockcheck_winners_test.sh
           sh tests/blockcheck_process_test.sh
+          sh tests/strategy_test_wan_test.sh
+          sh tests/zapret_rule_capacity_test.sh
 
   build:
     name: Build FreeBSD ${{ matrix.major }} pkg

@@ -40,10 +40,12 @@ jobs:
           sh -n src/etc/rc.syshook.d/stop/20-zapret
           echo "All shell scripts are valid."
 
-      - name: Test blockcheck helpers
+      - name: Test diagnostics and firewall helpers
         run: |
           sh tests/blockcheck_winners_test.sh
           sh tests/blockcheck_process_test.sh
+          sh tests/strategy_test_wan_test.sh
+          sh tests/zapret_rule_capacity_test.sh
 
       - name: Check file structure
         run: |

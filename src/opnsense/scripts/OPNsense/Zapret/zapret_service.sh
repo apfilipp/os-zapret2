@@ -139,6 +139,30 @@ configure_ipfw_reinject() {
     /sbin/pfctl -e >/dev/null 2>&1
 }
 
+validate_ipfw_rule_capacity() {
+    local rule_capacity=$((RULE_MAX - RULE_BASE + 1))
+    local rule_count=0
+    local IFS_SAVED="${IFS}"
+    IFS=","
+
+    for port in ${PORTS}; do
+        rule_count=$((rule_count + 1))
+    done
+
+    IFS="${IFS_SAVED}"
+
+    if [ -n "${QUIC_ARGS}" ]; then
+        rule_count=$((rule_count + 1))
+    fi
+
+    if [ "${rule_count}" -gt "${rule_capacity}" ]; then
+        echo "configured TCP and QUIC profiles require ${rule_count} ipfw rules; reserved range ${RULE_BASE}-${RULE_MAX} has room for ${rule_capacity}" >&2
+        return 1
+    fi
+
+    return 0
+}
+
 # Install ipfw divert rules — one per TCP port, plus one for UDP/443 when a
 # QUIC strategy is configured. Exact form from upstream zapret's pfSense
 # script (init.d/pfsense/zapret.sh:22):
@@ -176,6 +200,8 @@ configure_ipfw_reinject() {
 install_ipfw_rules() {
     local wan_dev="$1"
     local src_spec="any"
+
+    validate_ipfw_rule_capacity || return 1
 
     if [ -n "${SOURCE_NETS}" ]; then
         src_spec="${SOURCE_NETS}"
@@ -235,6 +261,8 @@ start_service() {
         echo "zapret is not running (disabled in settings)"
         exit 0
     fi
+
+    validate_ipfw_rule_capacity || exit 1
 
     # Already running?
     if [ -f "${SUPERVISOR_PIDFILE}" ] && kill -0 "$(cat ${SUPERVISOR_PIDFILE})" 2>/dev/null; then
@@ -329,7 +357,7 @@ start_service() {
         fi
     fi
 
-    install_ipfw_rules "${wan_dev}"
+    install_ipfw_rules "${wan_dev}" || exit 1
 
     # Start the safety watchdog under daemon(8) too. It probes a control URL
     # every minute and stops the service if 3 consecutive checks fail —
@@ -404,6 +432,8 @@ repair_service() {
         exit 0
     fi
 
+    validate_ipfw_rule_capacity || exit 1
+
     # Repair is intended for events such as WAN DHCP/PPPoE renew where
     # OPNsense may disable or rebuild ipfw while dvtws2 itself keeps running.
     # Do not restart the daemon here.
@@ -424,7 +454,7 @@ repair_service() {
         exit 1
     fi
 
-    install_ipfw_rules "${wan_dev}"
+    install_ipfw_rules "${wan_dev}" || exit 1
 
     echo "zapret firewall state repaired on ${wan_dev}"
 }

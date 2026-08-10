@@ -12,6 +12,7 @@ LC_ALL=C
 export LC_ALL
 
 ZAPRET_DIR="${ZAPRET_DIR:-/usr/local/etc/zapret2}"
+CONFIG="${ZAPRET_CONFIG:-${ZAPRET_DIR}/zapret.conf}"
 DVTWS_BIN="${DVTWS_BIN:-${ZAPRET_DIR}/binaries/my/dvtws2}"
 LUA_LIB="${LUA_LIB:-${ZAPRET_DIR}/lua/zapret-lib.lua}"
 LUA_ANTIDPI="${LUA_ANTIDPI:-${ZAPRET_DIR}/lua/zapret-antidpi.lua}"
@@ -253,6 +254,16 @@ if ! printf '%s\n' "${DOMAIN}" | grep -qE '^[a-zA-Z0-9][a-zA-Z0-9.-]+[a-zA-Z]{2,
     emit_error "Invalid domain format."
 fi
 
+if [ ! -r "${CONFIG}" ]; then
+    emit_error "Zapret configuration not found; save plugin settings first."
+fi
+
+. "${CONFIG}"
+
+if [ -z "${WAN_IF:-}" ]; then
+    emit_error "WAN interface is not configured; save plugin settings first."
+fi
+
 case "${ATTEMPTS}" in
     ''|*[!0-9]*|0)
         emit_error "Invalid attempt count."
@@ -314,8 +325,9 @@ if [ "${STRATEGY_TEST_SKIP_DVTWS:-0}" != "1" ]; then
         fi
     fi
 
-    wan_device=$(resolve_interface "${WAN_IF:-wan}")
-    [ -n "${wan_device}" ] || emit_error "Could not resolve WAN interface."
+    wan_device=$(resolve_interface "${WAN_IF}")
+    [ -n "${wan_device}" ] || \
+        emit_error "Could not resolve WAN interface ${WAN_IF}."
 
     if [ -n "${STRATEGY}" ]; then
         [ -x "${DVTWS_BIN}" ] || emit_error "dvtws2 binary not found at ${DVTWS_BIN}."
