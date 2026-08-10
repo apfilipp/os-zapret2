@@ -25,15 +25,399 @@
 #}
 
 <script>
-    // Try to parse a string as JSON, return null on failure.
-    function tryJSON(s) {
-        try { return JSON.parse(s); } catch (e) { return null; }
-    }
-
     $(document).ready(function() {
+        var blockcheckPollTimer = null;
+
+        function blockcheckEscape(value) {
+            if (value === undefined || value === null) {
+                value = "";
+            }
+            return $("<div>").text(String(value)).html();
+        }
+
+        function blockcheckDuration(seconds) {
+            seconds = parseInt(seconds || 0, 10);
+
+            var minutes = Math.floor(seconds / 60);
+            var remain = seconds % 60;
+
+            if (minutes > 0) {
+                return minutes + "m " + remain + "s";
+            }
+
+            return remain + "s";
+        }
+
+        function stopBlockcheckPolling() {
+            if (blockcheckPollTimer !== null) {
+                clearTimeout(blockcheckPollTimer);
+                blockcheckPollTimer = null;
+            }
+        }
+
+        function scheduleBlockcheckPoll(delay) {
+            stopBlockcheckPolling();
+
+            blockcheckPollTimer = setTimeout(function() {
+                pollBlockcheck();
+            }, delay);
+        }
+
+        function renderRunningBlockcheck(data) {
+            $("#blockcheckBtn").prop("disabled", true);
+            $("#blockcheckBtn_progress").addClass("fa fa-spinner fa-pulse");
+
+            $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+            $("#blockcheckStopBtn").prop("disabled", false).show();
+
+
+            var html = "";
+
+            html += '<strong>Blockcheck running</strong>';
+            html += '<br>Domain: <strong>' + blockcheckEscape(data.domain) + '</strong>';
+            html += '<br>Elapsed: ' + blockcheckEscape(blockcheckDuration(data.elapsed_seconds));
+            html += '<br>Strategies tested: ' + blockcheckEscape(data.attempts);
+
+            if (data.stage) {
+                html += '<br><br><strong>Current test:</strong>';
+                html += '<br><code style="white-space:normal;">' +
+                    blockcheckEscape(data.stage) +
+                    '</code>';
+            }
+
+            if (data.log_file) {
+                html += '<br><br><small class="text-muted">Full log: <code>' +
+                    blockcheckEscape(data.log_file) +
+                    '</code></small>';
+            }
+
+            $("#blockcheckSummary").html(html);
+
+            var winnersHtml = "";
+
+            if (data.winners && data.winners.length > 0) {
+                winnersHtml += '<strong>Working strategies found:</strong>';
+
+                $.each(data.winners, function(index, winner) {
+                    winnersHtml += '<div class="alert alert-success" style="margin-top:8px;margin-bottom:0;">';
+
+                    if (winner.test) {
+                        winnersHtml += '<strong>' +
+                            blockcheckEscape(winner.test) +
+                            '</strong>';
+
+                        if (winner.ip_version) {
+                            winnersHtml += ' / IPv' +
+                                blockcheckEscape(winner.ip_version);
+                        }
+
+                        winnersHtml += '<br>';
+                    }
+
+                    if (winner.daemon) {
+                        winnersHtml += '<small>' +
+                            blockcheckEscape(winner.daemon) +
+                            '</small><br>';
+                    }
+
+                    if (winner.strategy) {
+                        winnersHtml += '<code style="white-space:normal;">' +
+                            blockcheckEscape(winner.strategy) +
+                            '</code>';
+                    } else if (winner.raw) {
+                        winnersHtml += '<code style="white-space:normal;">' +
+                            blockcheckEscape(winner.raw) +
+                            '</code>';
+                    }
+
+                    winnersHtml += '</div>';
+                });
+            } else {
+                winnersHtml = '<em>No working strategies found yet.</em>';
+            }
+
+            var $winning = $("#blockcheckWinning");
+
+            if ($winning.data("renderedHtml") !== winnersHtml) {
+                $winning.html(winnersHtml);
+                $winning.data("renderedHtml", winnersHtml);
+            }
+
+            if (data.tail) {
+                $("#blockcheckRaw").text(data.tail);
+            }
+
+            scheduleBlockcheckPoll(2000);
+        }
+
+        function renderStoppedBlockcheck(data) {
+            stopBlockcheckPolling();
+
+            $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
+            $("#blockcheckBtn").prop("disabled", false);
+
+            $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+            $("#blockcheckStopBtn").prop("disabled", false).hide();
+
+            var html = '<span class="text-warning"><strong>Blockcheck stopped</strong></span>';
+
+            if (data.domain) {
+                html += '<br>Domain: <strong>' +
+                    blockcheckEscape(data.domain) +
+                    '</strong>';
+            }
+
+            if (data.elapsed_seconds !== undefined) {
+                html += '<br>Elapsed: ' +
+                    blockcheckEscape(blockcheckDuration(data.elapsed_seconds));
+            }
+
+            if (data.log_file) {
+                html += '<br><small class="text-muted">Full log: <code>' +
+                    blockcheckEscape(data.log_file) +
+                    '</code></small>';
+            }
+
+            $("#blockcheckSummary").html(html);
+        }
+
+        function renderFinishedBlockcheck(data) {
+            stopBlockcheckPolling();
+
+            $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
+            $("#blockcheckBtn").prop("disabled", false);
+
+            $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+            $("#blockcheckStopBtn").prop("disabled", false).hide();
+
+            var result = data.result || {};
+            var duration = result.duration_seconds;
+
+            if (duration === undefined || duration === null) {
+                duration = data.elapsed_seconds;
+            }
+
+            var timingHtml = '';
+
+            if (duration !== undefined && duration !== null) {
+                timingHtml =
+                    ' <small class="text-muted">(took ' +
+                    blockcheckEscape(blockcheckDuration(duration)) +
+                    ')</small>';
+            }
+
+            var logFileHtml = '';
+
+            if (result.log_file) {
+                logFileHtml =
+                    '<br><small class="text-muted">Full log: <code>' +
+                    blockcheckEscape(result.log_file) +
+                    '</code></small>';
+            }
+
+            if (result.status !== "ok") {
+                $("#blockcheckSummary").html(
+                    '<span class="text-danger"><strong>Blockcheck failed</strong></span>' +
+                    timingHtml +
+                    '<br>' +
+                    blockcheckEscape(result.message || "Unknown error") +
+                    logFileHtml
+                );
+
+                $("#blockcheckWinning").empty().removeData("renderedHtml");
+
+                if (result.log) {
+                    $("#blockcheckRaw").text(result.log);
+                }
+
+                return;
+            }
+
+            var winning = (result.winning || []).filter(function(line) {
+                return String(line).trim() !== '';
+            });
+
+            var allBaseline =
+                winning.length > 0 &&
+                winning.every(function(line) {
+                    return /working without bypass/i.test(line);
+                });
+
+            var domain = result.domain || data.domain || "";
+            var summaryHtml = "";
+
+            if (allBaseline) {
+                summaryHtml =
+                    '<span class="text-success"><strong>' +
+                    blockcheckEscape(domain) +
+                    '</strong> reaches its server without DPI bypass.</span>' +
+                    timingHtml +
+                    '<br>The tested connection already works without a bypass strategy.' +
+                    logFileHtml;
+            } else {
+                summaryHtml =
+                    '<span class="text-success"><strong>Blockcheck finished</strong></span>' +
+                    timingHtml;
+
+                if (domain) {
+                    summaryHtml +=
+                        '<br>Domain: <strong>' +
+                        blockcheckEscape(domain) +
+                        '</strong>';
+                }
+
+                if (result.partial) {
+                    summaryHtml +=
+                        ' <span class="label label-warning">partial</span>' +
+                        '<br><small class="text-muted">' +
+                        'The scan did not complete, but strategies confirmed before termination are shown below.' +
+                        '</small>';
+                }
+
+                summaryHtml += logFileHtml;
+            }
+
+            $("#blockcheckSummary").html(summaryHtml);
+
+            var winnersHtml = "";
+
+            if (winning.length > 0) {
+                winnersHtml = '<strong>Working strategies:</strong>';
+                winnersHtml += '<ul style="font-family:monospace;font-size:12px;margin-top:8px;">';
+
+                $.each(winning, function(index, strategy) {
+                    winnersHtml +=
+                        '<li style="margin-bottom:6px;">' +
+                        blockcheckEscape(strategy) +
+                        '</li>';
+                });
+
+                winnersHtml += '</ul>';
+            } else {
+                winnersHtml =
+                    '<em>No working strategies found in the standard test set.</em>';
+            }
+
+            $("#blockcheckWinning").html(winnersHtml);
+            $("#blockcheckRaw").text(result.summary || result.log || '');
+        }
+
+        function renderStoppedBlockcheck(data) {
+            stopBlockcheckPolling();
+
+            $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
+            $("#blockcheckBtn").prop("disabled", false);
+
+            $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+            $("#blockcheckStopBtn").prop("disabled", false).hide();
+
+            var html = '<span class="text-warning"><strong>Blockcheck stopped</strong></span>';
+
+            if (data.domain) {
+                html += '<br>Domain: <strong>' +
+                    blockcheckEscape(data.domain) +
+                    '</strong>';
+            }
+
+            if (data.elapsed_seconds !== undefined) {
+                html += '<br>Elapsed: ' +
+                    blockcheckEscape(blockcheckDuration(data.elapsed_seconds));
+            }
+
+            if (data.log_file) {
+                html += '<br><small class="text-muted">Full log: <code>' +
+                    blockcheckEscape(data.log_file) +
+                    '</code></small>';
+            }
+
+            $("#blockcheckSummary").html(html);
+        }
+
+        function renderBlockcheckStatus(data) {
+            if (!data) {
+                return;
+            }
+
+            if (data.status !== "ok") {
+                stopBlockcheckPolling();
+
+                $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
+                $("#blockcheckBtn").prop("disabled", false);
+
+                $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+                $("#blockcheckStopBtn").prop("disabled", false).hide();
+
+                $("#blockcheckSummary").html(
+                    '<span class="text-danger">' +
+                    blockcheckEscape(data.message || "Blockcheck status error") +
+                    '</span>'
+                );
+
+                return;
+            }
+
+            if (data.state === "running") {
+                renderRunningBlockcheck(data);
+                return;
+            }
+
+            if (data.state === "finished") {
+                renderFinishedBlockcheck(data);
+                return;
+            }
+
+            if (data.state === "stopped") {
+                renderStoppedBlockcheck(data);
+                return;
+            }
+
+            if (data.state === "idle") {
+                stopBlockcheckPolling();
+                $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
+                $("#blockcheckBtn").prop("disabled", false);
+
+                $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+                $("#blockcheckStopBtn").prop("disabled", false).hide();
+            }
+        }
+
+        function pollBlockcheck() {
+            $.ajax({
+                type: "GET",
+                url: "/api/zapret/diagnostics/blockcheckstatus",
+                dataType: "json",
+                timeout: 10000,
+
+                success: function(data) {
+                    renderBlockcheckStatus(data);
+                },
+
+                error: function() {
+                    scheduleBlockcheckPoll(3000);
+                }
+            });
+        }
+
+        function resumeRunningBlockcheck() {
+            $.ajax({
+                type: "GET",
+                url: "/api/zapret/diagnostics/blockcheckstatus",
+                dataType: "json",
+                timeout: 10000,
+
+                success: function(data) {
+                    if (data && data.status === "ok" && data.state === "running") {
+                        renderRunningBlockcheck(data);
+                    }
+                }
+            });
+        }
+
         // ---- Test Domain Connectivity ----
         $("#testDomainBtn").click(function() {
             var domain = $("#testDomainInput").val().trim();
+            var strategy = $("#testStrategyInput").val().trim();
+
             if (!domain) {
                 BootstrapDialog.show({
                     type: BootstrapDialog.TYPE_WARNING,
@@ -42,21 +426,51 @@
                 });
                 return;
             }
+
+            $("#testDomainBtn").prop("disabled", true);
             $("#testDomainBtn_progress").addClass("fa fa-spinner fa-pulse");
-            $("#testDomainResult").text("Testing...");
-            ajaxCall('/api/zapret/diagnostics/testdomain', {'domain': domain}, function(data, status) {
-                $("#testDomainBtn_progress").removeClass("fa fa-spinner fa-pulse");
-                if (data.status === 'ok') {
-                    $("#testDomainResult").text(data.result);
-                } else {
-                    $("#testDomainResult").text("Error: " + (data.message || "Unknown error"));
+            $("#testDomainResult").text(
+                "Resolving all IPv4 addresses and running 10 TLS tests per address..."
+            );
+
+            ajaxCall(
+                '/api/zapret/diagnostics/testdomain',
+                {
+                    'domain': domain,
+                    'strategy': strategy
+                },
+                function(data, status) {
+                    $("#testDomainBtn").prop("disabled", false);
+                    $("#testDomainBtn_progress").removeClass("fa fa-spinner fa-pulse");
+
+                    if (status !== "success" || !data || typeof data.status !== "string") {
+                        var requestStatus = status && status !== "success"
+                            ? " (" + status + ")"
+                            : "";
+
+                        $("#testDomainResult").text(
+                            "Error: diagnostics backend request failed" +
+                            requestStatus +
+                            ". Check that configd is running and retry."
+                        );
+                        return;
+                    }
+
+                    if (data.status === 'ok') {
+                        $("#testDomainResult").text(data.result);
+                    } else {
+                        $("#testDomainResult").text(
+                            "Error: " + (data.message || "Unknown error")
+                        );
+                    }
                 }
-            });
+            );
         });
 
         // ---- Blockcheck (Strategy Finder) ----
         $("#blockcheckBtn").click(function() {
             var domain = $("#blockcheckDomainInput").val().trim();
+            var mode = $("#blockcheckMode").val();
             if (!domain) {
                 BootstrapDialog.show({
                     type: BootstrapDialog.TYPE_WARNING,
@@ -65,209 +479,268 @@
                 });
                 return;
             }
+
+            stopBlockcheckPolling();
+
+            $("#blockcheckBtn").prop("disabled", true);
             $("#blockcheckBtn_progress").addClass("fa fa-spinner fa-pulse");
-            $("#blockcheckSummary").html('<em>Running blockcheck against ' + $('<div>').text(domain).html() +
-                '… this takes 1–3 minutes. Don\'t close this page.</em>');
-            $("#blockcheckWinning").html('');
+            $("#blockcheckSummary").html(
+                '<em>Starting blockcheck against <strong>' +
+                blockcheckEscape(domain) +
+                '</strong>...</em>'
+            );
+            $("#blockcheckWinning").empty().removeData("renderedHtml");
             $("#blockcheckRaw").text('');
 
-            // Bypass OPNsense's ajaxCall (which has a short default timeout)
-            // and call $.ajax directly with a 10-minute timeout — blockcheck2
-            // takes 1–3 minutes for a standard scan and we'd rather wait than
-            // give the user the misleading "Unstructured output" fallback.
-            var doneFn = function(data, status) {
-                $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
-
-                if (!data || data.status !== 'ok') {
-                    $("#blockcheckSummary").html('<span class="text-danger">' +
-                        $('<div>').text("Error: " + (data.message || 'Unknown error')).html() + '</span>');
-                    return;
-                }
-
-                // data.result is JSON-as-string from blockcheck.sh. Parse it.
-                var bc = tryJSON(data.result);
-                if (!bc) {
-                    // Old wrapper or unexpected output — just dump it
-                    $("#blockcheckSummary").html('<em>Unstructured output:</em>');
-                    $("#blockcheckRaw").text(data.result || '(empty)');
-                    return;
-                }
-
-                // Format duration as "Xm Ys" — handier than raw seconds when
-                // a run takes 10+ minutes.
-                var fmtDuration = function(s) {
-                    if (typeof s !== 'number' || isNaN(s)) return '';
-                    if (s < 60) return s + 's';
-                    var m = Math.floor(s / 60);
-                    var rem = s % 60;
-                    return m + 'm ' + rem + 's';
-                };
-                var timingHtml = '';
-                if (bc.duration_seconds !== undefined) {
-                    timingHtml = ' <small class="text-muted">(took ' +
-                        fmtDuration(bc.duration_seconds) + ')</small>';
-                }
-
-                // Persistent log path — surface it on every result so the
-                // user can ssh in and `cat`/`grep` the full output, which is
-                // far more than the 2000-byte log slice we embed in JSON.
-                var logFileHtml = '';
-                if (bc.log_file) {
-                    logFileHtml = '<br><small class="text-muted">Full log: <code>' +
-                        $('<div>').text(bc.log_file).html() + '</code></small>';
-                }
-
-                if (bc.status === 'error') {
-                    $("#blockcheckSummary").html('<span class="text-danger">' +
-                        $('<div>').text("Blockcheck error: " + bc.message).html() +
-                        '</span>' + timingHtml + logFileHtml);
-                    if (bc.log) $("#blockcheckRaw").text(bc.log);
-                    return;
-                }
-
-                // Detect the "site is not censored from this firewall" case.
-                // blockcheck2 reports lines like "... : working without bypass"
-                // when the baseline test (no DPI evasion) already succeeds.
-                // Picking such a line as a strategy makes no sense — surface
-                // a clear explanation instead of asking the user to copy it.
-                var winning = (bc.winning || []).filter(function(l){ return l.trim() !== ''; });
-                var allBaseline = winning.length > 0 && winning.every(function(l){
-                    return /working without bypass/i.test(l);
-                });
-
-                var domEsc = $('<div>').text(bc.domain).html();
-
-                if (allBaseline) {
-                    $("#blockcheckSummary").html(
-                        '<span class="text-success"><strong>' + domEsc + '</strong> reaches its server fine from this firewall ' +
-                        'without any DPI bypass.</span>' + timingHtml + '<br>' +
-                        'This means either (a) your ISP does not block this domain, or (b) your firewall\'s DNS resolver ' +
-                        '(e.g. AdGuard, Unbound DoH) is already bypassing a DNS-based block. ' +
-                        'If LAN clients still cannot reach it, the issue is on the client side — usually because clients ' +
-                        'are using their own DNS instead of this firewall. Try a domain you know is blocked at the TLS/SNI ' +
-                        'layer to find a useful strategy.'
-                    );
-                } else {
-                    var partialHtml = '';
-                    if (bc.partial) {
-                        partialHtml = ' <span class="label label-warning">partial</span>' +
-                            '<br><small class="text-muted">Blockcheck did not finish (it usually takes longer than the wrapper\'s ' +
-                            'timeout for heavily-blocked domains). The strategies below are the per-protocol winners that ' +
-                            'blockcheck2 confirmed inline before being killed — they\'re the same picks the full SUMMARY would have ' +
-                            'shown for the protocols it managed to test. To get a complete result, set ' +
-                            '<code>BLOCKCHECK_TIMEOUT=2700</code> and re-run via SSH.</small>';
-                    }
-                    $("#blockcheckSummary").html('Tested <strong>' + domEsc +
-                        '</strong>' + timingHtml + partialHtml +
-                        '. Strategies that worked are listed below — copy one into the HTTPS Strategy field on the Settings page.' +
-                        logFileHtml);
-                }
-
-                // List winning strategies
-                var html = '';
-                if (winning.length > 0) {
-                    html = '<ul style="font-family: monospace; font-size: 12px;">';
-                    winning.forEach(function(line) {
-                        html += '<li>' + $('<div>').text(line).html() + '</li>';
-                    });
-                    html += '</ul>';
-                } else {
-                    html = '<em>No working strategies found in the standard test set. Try a different domain or run blockcheck2 manually via SSH for a custom search.</em>';
-                }
-                $("#blockcheckWinning").html(html);
-
-                // Full summary in raw box
-                $("#blockcheckRaw").text(bc.summary || '');
-            };
-
-            var errFn = function(jqXHR, textStatus, errorThrown) {
-                $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
-                var msg = (textStatus === 'timeout')
-                    ? 'Blockcheck took longer than 10 minutes and was cancelled. Try a single domain at a time or a faster ISP.'
-                    : 'Request failed: ' + textStatus;
-                $("#blockcheckSummary").html('<span class="text-danger">' +
-                    $('<div>').text(msg).html() + '</span>');
-            };
-
-            // Form-encoded POST so OPNsense's ApiControllerBase->getPost() works.
             $.ajax({
-                type: 'POST',
-                url: '/api/zapret/diagnostics/blockcheck',
-                data: {'domain': domain},
-                dataType: 'json',
-                timeout: 600000,   // 10 minutes — match the configd action's timeout
-                success: doneFn,
-                error: errFn
+                type: "POST",
+                url: "/api/zapret/diagnostics/blockcheck",
+                data: {
+                    'domain': domain,
+                    'mode': mode
+                },
+                dataType: "json",
+                timeout: 10000,
+
+                success: function(data) {
+                    if (data && data.status === "ok") {
+                        pollBlockcheck();
+                        return;
+                    }
+
+                    $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
+                    $("#blockcheckBtn").prop("disabled", false);
+
+                    $("#blockcheckSummary").html(
+                        '<span class="text-danger">' +
+                        blockcheckEscape(
+                            (data && data.message) ||
+                            "Unable to start blockcheck"
+                        ) +
+                        '</span>'
+                    );
+                },
+
+                error: function(jqXHR, textStatus) {
+                    $("#blockcheckBtn_progress").removeClass("fa fa-spinner fa-pulse");
+                    $("#blockcheckBtn").prop("disabled", false);
+
+                    $("#blockcheckSummary").html(
+                        '<span class="text-danger">Request failed: ' +
+                        blockcheckEscape(textStatus) +
+                        '</span>'
+                    );
+                }
             });
         });
+
+        $("#blockcheckStopBtn").click(function() {
+            $("#blockcheckStopBtn").prop("disabled", true);
+            $("#blockcheckStopBtn_progress").addClass("fa fa-spinner fa-pulse");
+
+            $("#blockcheckSummary").append(
+                '<br><em>Stopping blockcheck...</em>'
+            );
+
+            $.ajax({
+                type: "POST",
+                url: "/api/zapret/diagnostics/blockcheckstop",
+                dataType: "json",
+                timeout: 10000,
+
+                success: function(data) {
+                    if (data && data.status === "ok") {
+                        scheduleBlockcheckPoll(500);
+                        return;
+                    }
+
+                    $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+                    $("#blockcheckStopBtn").prop("disabled", false);
+
+                    $("#blockcheckSummary").append(
+                        '<br><span class="text-danger">' +
+                        blockcheckEscape(
+                            (data && data.message) || "Unable to stop blockcheck"
+                        ) +
+                        '</span>'
+                    );
+                },
+
+                error: function(jqXHR, textStatus) {
+                    $("#blockcheckStopBtn_progress").removeClass("fa fa-spinner fa-pulse");
+                    $("#blockcheckStopBtn").prop("disabled", false);
+
+                    $("#blockcheckSummary").append(
+                        '<br><span class="text-danger">Stop request failed: ' +
+                        blockcheckEscape(textStatus) +
+                        '</span>'
+                    );
+                }
+            });
+        });
+
+        // If the page was refreshed while a detached blockcheck is still
+        // running, reconnect the UI to it automatically.
+        resumeRunningBlockcheck();
     });
 </script>
 
 <section class="page-content-main">
     <div class="container-fluid">
+
         <div class="row">
             <section class="col-xs-12">
                 <div class="content-box">
+
                     <div class="content-box-header">
                         <h3>{{ lang._('Test Domain Connectivity') }}</h3>
                     </div>
+
                     <div class="content-box-main">
+
                         <div class="table-responsive">
                             <table class="table table-striped">
                                 <tbody>
                                     <tr>
-                                        <td style="width: 200px;">{{ lang._('Domain') }}</td>
-                                        <td>
-                                            <input type="text" class="form-control" id="testDomainInput" placeholder="example.com"/>
+                                        <td style="width: 200px;">
+                                            {{ lang._('Domain') }}
                                         </td>
+
+                                        <td>
+                                            <input
+                                                type="text"
+                                                class="form-control"
+                                                id="testDomainInput"
+                                                placeholder="example.com"
+                                            />
+                                        </td>
+
                                         <td style="width: 150px;">
-                                            <button class="btn btn-primary" id="testDomainBtn" type="button">
-                                                {{ lang._('Test') }} <i id="testDomainBtn_progress"></i>
+                                            <button
+                                                class="btn btn-primary"
+                                                id="testDomainBtn"
+                                                type="button"
+                                            >
+                                                {{ lang._('Test') }}
+                                                <i id="testDomainBtn_progress"></i>
                                             </button>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td style="width: 200px; vertical-align: top;">
+                                            {{ lang._('HTTPS Strategy') }}
+                                        </td>
+
+                                        <td colspan="2">
+                                            <textarea
+                                                class="form-control"
+                                                id="testStrategyInput"
+                                                rows="3"
+                                                spellcheck="false"
+                                                placeholder="--payload=tls_client_hello --lua-desync=..."
+                                            ></textarea>
+                                            <small class="text-muted">
+                                                {{ lang._('Paste the dvtws2 arguments from blockcheck. Leave empty to test direct connectivity without any bypass strategy. Every resolved IPv4 address is tested 10 times from the firewall itself through an isolated temporary rule; LAN-client routing is not simulated.') }}
+                                            </small>
                                         </td>
                                     </tr>
                                 </tbody>
                             </table>
                         </div>
+
                         <div class="col-md-12">
-                            <pre id="testDomainResult" style="max-height: 300px; overflow-y: auto; white-space: pre-wrap;">{{ lang._('Enter a domain and click Test to check HTTPS connectivity.') }}</pre>
+                            <pre
+                                id="testDomainResult"
+                                style="max-height: 500px; overflow-y: auto; white-space: pre-wrap;"
+                            >{{ lang._('Enter a domain and optionally a strategy, then click Test. All IPv4 addresses will be tested 10 times.') }}</pre>
                         </div>
+
                     </div>
                 </div>
             </section>
         </div>
+
         <div class="row">
             <section class="col-xs-12">
                 <div class="content-box">
+
                     <div class="content-box-header">
                         <h3>{{ lang._('Blockcheck (Strategy Finder)') }}</h3>
                     </div>
+
                     <div class="content-box-main">
+
                         <div class="table-responsive">
                             <table class="table table-striped">
                                 <tbody>
                                     <tr>
-                                        <td style="width: 200px;">{{ lang._('Blocked Domain') }}</td>
-                                        <td>
-                                            <input type="text" class="form-control" id="blockcheckDomainInput" placeholder="rutracker.org"/>
+                                        <td style="width: 200px;">
+                                            {{ lang._('Blocked Domain') }}
                                         </td>
-                                        <td style="width: 150px;">
-                                            <button class="btn btn-primary" id="blockcheckBtn" type="button">
-                                                {{ lang._('Run') }} <i id="blockcheckBtn_progress"></i>
+
+                                        <td>
+                                            <input
+                                                type="text"
+                                                class="form-control"
+                                                id="blockcheckDomainInput"
+                                                placeholder="rutracker.org"
+                                            />
+                                            <div style="margin-top: 8px;">
+                                                <select class="form-control" id="blockcheckMode">
+                                                    <option value="tls13" selected>TLS 1.3 (HTTPS / TCP 443)</option>
+                                                    <option value="tls12">TLS 1.2 (HTTPS / TCP 443)</option>
+                                                    <option value="http3">HTTP/3 (QUIC / UDP 443)</option>
+                                                    <option value="http">HTTP (TCP 80)</option>
+                                                    <option value="all">All protocols</option>
+                                                </select>
+                                            </div>
+                                        </td>
+
+                                        <td style="width: 220px;">
+                                            <button
+                                                class="btn btn-primary"
+                                                id="blockcheckBtn"
+                                                type="button"
+                                            >
+                                                {{ lang._('Run') }}
+                                                <i id="blockcheckBtn_progress"></i>
+                                            </button>
+
+                                            <button
+                                                class="btn btn-danger"
+                                                id="blockcheckStopBtn"
+                                                type="button"
+                                                style="display:none; margin-left:5px;"
+                                            >
+                                                {{ lang._('Stop') }}
+                                                <i id="blockcheckStopBtn_progress"></i>
                                             </button>
                                         </td>
                                     </tr>
                                 </tbody>
                             </table>
                         </div>
+
                         <div class="col-md-12" style="padding-top: 10px;">
+
                             <div id="blockcheckSummary">
-                                {{ lang._('Enter a domain that your ISP currently blocks and click Run. Blockcheck will spend 1–3 minutes testing many DPI bypass strategies and report which ones successfully reach the site. Copy a working strategy into the HTTPS Strategy field on the Settings page.') }}
+                                {{ lang._('Enter a domain that your ISP currently blocks and click Run. Blockcheck runs in the background and live progress will be shown here.') }}
                             </div>
-                            <div id="blockcheckWinning" style="padding-top: 10px;"></div>
+
+                            <div
+                                id="blockcheckWinning"
+                                style="padding-top: 10px;"
+                            ></div>
+
                             <details style="padding-top: 10px;">
-                                <summary>{{ lang._('Full output (advanced)') }}</summary>
-                                <pre id="blockcheckRaw" style="max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-size: 11px;"></pre>
+                                <summary>
+                                    {{ lang._('Live output / full output (advanced)') }}
+                                </summary>
+
+                                <pre
+                                    id="blockcheckRaw"
+                                    style="max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-size: 11px;"
+                                ></pre>
                             </details>
                         </div>
                     </div>

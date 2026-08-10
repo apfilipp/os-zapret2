@@ -2,6 +2,65 @@
 
 All notable changes to os-zapret2 are documented in this file.
 
+## Unreleased
+
+## v1.8.3 - 2026-08-10
+
+Most of this release was contributed by [apfilipp](https://github.com/apfilipp).
+
+### Added
+
+- **Asynchronous Blockcheck diagnostics** with live progress, persistent logs,
+  explicit stop support, and single-job locking. The configured Zapret service
+  is suspended only for the scan and restored afterward.
+- **HTTP/3 / QUIC strategy discovery** backed by a bundled private HTTP/3 curl,
+  so QUIC checks do not depend on the capabilities of OPNsense's system curl.
+- **Per-strategy HTTPS stability test** in Diagnostics. An administrator can
+  paste dvtws2 arguments (or leave the field empty to test direct connectivity
+  without bypass), resolve every IPv4 address for a domain, and run ten requests
+  against each address. The test uses an isolated temporary dvtws2 instance
+  and a target-specific ipfw rule, reports compact per-address success counts,
+  writes a persistent log under `/var/log/zapret`, and leaves the
+  configured service and its firewall rules unchanged. The UI explicitly
+  identifies this as a firewall-originated test rather than a LAN-path test.
+
+### Fixed
+
+- **Blockcheck lifecycle and firewall safety.** Concurrent starts are rejected,
+  elapsed time freezes after stop, required upstream patch targets are
+  validated, firewall setup fails closed, and domain/timeout guards are
+  preserved when refreshing the bundled upstream script.
+- **Blockcheck result validation.** Only confirmed packet-test successes are
+  accepted, malformed results are rejected, and winning strategies are parsed
+  without treating headings or unrelated output as usable configurations.
+- **Service restoration.** A running Zapret instance is restored after a scan,
+  and its firewall state is repaired after WAN address renewal.
+- **Package installation no longer leaves `configd` stopped.** The post-install
+  hook reloads the existing configd worker under its persistent supervisor
+  instead of restarting the whole daemon inside the pkg transaction. Plugin
+  configuration is also refreshed after uninstall.
+- **Diagnostics failures are visible.** Domain checks preserve failure output
+  and now show an explicit backend/configd error instead of clearing the result
+  field when no response is returned.
+- **QUIC hostlist handling** now follows upstream zapret semantics.
+- Invalid `zapret_service.sh` subcommands exit non-zero again instead of
+  reporting success.
+
+### Changed
+
+- **dvtws2 is now explicitly scoped with `--filter-tcp=<ports>`.** Previously
+  the daemon applied its strategy to everything the ipfw divert rules handed
+  it; the TCP profile is now bound to the configured Ports value so the new
+  QUIC profile can be attached as a separate `--new` profile. Behavior is
+  unchanged for the default `80,443`, but anyone relying on dvtws2 processing
+  traffic beyond the configured ports should re-check their setup.
+- **QUIC ipfw rules are only installed when a QUIC strategy is set.** Leaving
+  the QUIC Strategy field empty reproduces the pre-1.8.3 rule set exactly.
+- **The bundled HTTP/3 client is fetched from the FreeBSD `latest` repository
+  at build time**, so its version is not pinned. The resolved version is now
+  printed during the build and recorded in
+  `/usr/local/libexec/zapret2/curl-h3/VERSION`.
+
 ## v1.8.2 - 2026-07-28
 
 ### Fixed

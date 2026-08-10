@@ -5,6 +5,7 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_dispatch:
 
 jobs:
   validate:
@@ -39,6 +40,13 @@ jobs:
           sh -n src/etc/rc.syshook.d/stop/20-zapret
           echo "All shell scripts are valid."
 
+      - name: Test diagnostics and firewall helpers
+        run: |
+          sh tests/blockcheck_winners_test.sh
+          sh tests/blockcheck_process_test.sh
+          sh tests/strategy_test_wan_test.sh
+          sh tests/zapret_rule_capacity_test.sh
+
       - name: Check file structure
         run: |
           echo "Checking required files..."
@@ -69,7 +77,7 @@ jobs:
         include:
           # One package per FreeBSD major: pkg refuses to install across
           # majors (issue #5). 14.x covers OPNsense <= 26.4, 15.x covers 26.7+.
-          - release: "14.2"
+          - release: "14.3"
             major: "14"
           - release: "15.1"
             major: "15"
@@ -95,9 +103,12 @@ jobs:
           release: "${{ matrix.release }}"
           usesh: true
           prepare: |
-            pkg install -y jq
+            # The quarterly FreeBSD repository can move to a newer 14.x
+            # userland before OPNsense moves its 14.3 kernel. We only fetch
+            # build tools here, so bypassing the minor-version guard is safe.
+            env IGNORE_OSVERSION=yes pkg install -y jq
           run: |
-            sh scripts/build-pkg.sh
+            env IGNORE_OSVERSION=yes sh scripts/build-pkg.sh
 
       - name: Inspect built package
         run: |

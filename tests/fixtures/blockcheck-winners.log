@@ -1,0 +1,20 @@
+* curl_test_https_tls13 ipv4 stale.example
+- checking without DPI bypass
+UNAVAILABLE code=28
+> unrelated connectivity probe
+!!!!! AVAILABLE !!!!!
+
+* curl_test_http ipv4 direct.example
+- checking without DPI bypass
+!!!!! AVAILABLE !!!!!
+
+* script : standard/example.sh
+- curl_test_http ipv4 direct.example : dvtws2 --payload=http_req --lua-desync=fake
+UNAVAILABLE code=28
+- curl_test_http ipv4 direct.example : dvtws2 --payload=http_req --lua-desync=multisplit:pos=host+1
+!!!!! AVAILABLE !!!!!
+- curl_test_http ipv4 direct.example : dvtws2 --payload=http_req --lua-desync=multisplit:pos=host+1
+!!!!! AVAILABLE !!!!!
+
+!!!!! curl_test_http: working strategy found for ipv4 direct.example : dvtws2 --payload=http_req --lua-desync=multisplit:pos=host+1 !!!!!
+!!!!! curl_test_http3: working strategy found for ipv6 old.example : dvtws2 --payload=quic_initial --lua-desync=fake !!!!!

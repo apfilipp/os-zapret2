@@ -119,3 +119,7 @@ MIT — same as [bol-van/zapret2](https://github.com/bol-van/zapret2).
 
 - [bol-van/zapret2](https://github.com/bol-van/zapret2) — the underlying DPI bypass tool and lua strategy engine.
 - [OPNsense](https://opnsense.org/) — the firewall platform.
+- [lexiforest/curl-impersonate](https://github.com/lexiforest/curl-impersonate) — the bundled HTTP/3 client used for QUIC blockcheck.
+- [apfilipp](https://github.com/apfilipp) — asynchronous Blockcheck, QUIC/HTTP-3 support, firewall self-repair, and the per-strategy stability test (most of v1.8.3).
+
+See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list.

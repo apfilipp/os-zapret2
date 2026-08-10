@@ -16,15 +16,56 @@
 ZAPRET_DIR="/usr/local/etc/zapret2"
 BLOCKCHECK="${ZAPRET_DIR}/blockcheck2.sh"
 CONFIG="${ZAPRET_DIR}/zapret.conf"
+WINNER_PARSER="/usr/local/opnsense/scripts/OPNsense/Zapret/blockcheck_winners.awk"
+JQ="/usr/local/bin/jq"
 
-# How long to let blockcheck run before aborting (seconds). Heavily
-# blocked domains can take 15+ min for a full HTTP+TLS12+TLS13 sweep
-# (each curl test that fails sits at curl's 5-10s timeout, and there
-# are 50+ strategies per protocol). Cap at 25 min by default; user can
-# override via env (BLOCKCHECK_TIMEOUT=1800 in front of the call).
+DOMAIN="${1:-}"
+
+# Hard upper bound for a detached blockcheck run. The job controller is
+# asynchronous, so configd's short action timeout cannot stop a hung upstream
+# process for us. Callers may override this with BLOCKCHECK_TIMEOUT.
 TIMEOUT="${BLOCKCHECK_TIMEOUT:-1500}"
 
-DOMAIN="$1"
+MODE="${2:-all}"
+
+case "${MODE}" in
+    tls13)
+        BC_HTTP=0
+        BC_TLS12=0
+        BC_TLS13=1
+        BC_HTTP3=0
+        ;;
+    tls12)
+        BC_HTTP=0
+        BC_TLS12=1
+        BC_TLS13=0
+        BC_HTTP3=0
+        ;;
+    http)
+        BC_HTTP=1
+        BC_TLS12=0
+        BC_TLS13=0
+        BC_HTTP3=0
+        ;;
+    http3)
+        BC_HTTP=0
+        BC_TLS12=0
+        BC_TLS13=0
+        BC_HTTP3=1
+        ;;
+    all)
+        BC_HTTP=1
+        BC_TLS12=1
+        BC_TLS13=1
+        BC_HTTP3=1
+        ;;
+    *)
+        BC_HTTP=1
+        BC_TLS12=1
+        BC_TLS13=1
+        BC_HTTP3=1
+        ;;
+esac
 
 # Wall-clock timestamps for the JSON output. ISO-8601 UTC for human
 # readability; epoch for cheap duration math. We capture STARTED at
@@ -43,7 +84,7 @@ emit_error() {
     finished_epoch=$(date -u +%s)
     finished_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     duration=$((finished_epoch - STARTED_EPOCH))
-    /usr/local/bin/jq -nc \
+    "${JQ}" -nc \
         --arg msg "$1" \
         --arg started "${STARTED_ISO}" \
         --arg finished "${finished_iso}" \
@@ -52,6 +93,17 @@ emit_error() {
 }
 
 # Argument validation
+if [ ! -x "${JQ}" ]; then
+    echo '{"status":"error","message":"jq is not installed — run setup.sh first"}'
+    exit 0
+fi
+
+case "${TIMEOUT}" in
+    ''|*[!0-9]*)
+        emit_error "invalid BLOCKCHECK_TIMEOUT"
+        exit 0
+        ;;
+esac
 if [ -z "${DOMAIN}" ]; then
     emit_error "no domain specified"
     exit 0
@@ -68,24 +120,19 @@ if [ ! -f "${CONFIG}" ]; then
     emit_error "zapret config not found — save plugin settings first"
     exit 0
 fi
+if [ ! -r "${WINNER_PARSER}" ]; then
+    emit_error "blockcheck winner parser not found — reinstall the plugin"
+    exit 0
+fi
 
 # Resolve WAN device from plugin config
 . "${CONFIG}"
 WAN_DEV=""
-if [ -x /usr/local/bin/jq ]; then
+if [ -x "${JQ}" ]; then
     WAN_DEV=$(/usr/local/sbin/pluginctl -4 "${WAN_IF}" 2>/dev/null \
-        | /usr/local/bin/jq -r --arg if "${WAN_IF}" '.[$if][0].device // empty')
+        | "${JQ}" -r --arg if "${WAN_IF}" '.[$if][0].device // empty')
 fi
 [ -z "${WAN_DEV}" ] && WAN_DEV="${WAN_IF}"
-
-# blockcheck2 refuses to run reliably while another DPI bypass is active.
-# Stop zapret if it's running — we'll restart it on exit if it was.
-WAS_RUNNING=0
-if [ -f /var/run/dvtws2.pid ] && kill -0 "$(cat /var/run/dvtws2.pid)" 2>/dev/null; then
-    WAS_RUNNING=1
-    /usr/local/sbin/configctl zapret stop >/dev/null 2>&1
-    sleep 2
-fi
 
 # blockcheck2 wants ipfw enabled to install its own divert rules. Save
 # the previous state so the trap can restore exactly what we found.
@@ -112,8 +159,91 @@ fi
 #      the trap below re-enables pf and reloads OPNsense's ruleset.
 WAS_IPFW_LOADED=0
 /sbin/kldstat -q -m ipfw && WAS_IPFW_LOADED=1
+WAS_IPDIVERT_LOADED=0
+/sbin/kldstat -q -m ipdivert && WAS_IPDIVERT_LOADED=1
 PREV_IPFW=$(/sbin/sysctl -n net.inet.ip.fw.enable 2>/dev/null || echo 0)
 PREV_IPFW6=$(/sbin/sysctl -n net.inet6.ip6.fw.enable 2>/dev/null || echo 0)
+ADDED_BASELINE_RULE=0
+BLOCKCHECK_TMP=""
+FIREWALL_TOUCHED=0
+WAS_RUNNING=0
+ZAPRET_CHILD_PID=""
+ZAPRET_SUPERVISOR_PID=""
+ZAPRET_PIDFILE="/var/run/dvtws2.pid"
+ZAPRET_SUPERVISOR_PIDFILE="/var/run/dvtws2-supervisor.pid"
+
+process_matches()
+{
+    process_pid="$1"
+    first_marker="$2"
+    second_marker="${3:-}"
+
+    case "${process_pid}" in
+        ''|*[!0-9]*)
+            return 1
+            ;;
+    esac
+
+    kill -0 "${process_pid}" 2>/dev/null || return 1
+    process_command=$(ps -o command= -p "${process_pid}" 2>/dev/null)
+
+    if [ -n "${second_marker}" ]; then
+        case "${process_command}" in
+            *"${first_marker}"*"${second_marker}"*)
+                return 0
+                ;;
+        esac
+    else
+        case "${process_command}" in
+            *"${first_marker}"*)
+                return 0
+                ;;
+        esac
+    fi
+
+    return 1
+}
+
+read_managed_pid()
+{
+    pidfile="$1"
+    first_marker="$2"
+    second_marker="${3:-}"
+    CHECKED_PID=""
+
+    [ -f "${pidfile}" ] || return 1
+    checked_pid=$(cat "${pidfile}" 2>/dev/null)
+
+    case "${checked_pid}" in
+        ''|*[!0-9]*)
+            return 1
+            ;;
+    esac
+
+    kill -0 "${checked_pid}" 2>/dev/null || return 1
+    if ! process_matches "${checked_pid}" "${first_marker}" "${second_marker}"; then
+        return 2
+    fi
+
+    CHECKED_PID="${checked_pid}"
+    return 0
+}
+
+zapret_processes_running()
+{
+    process_matches "${ZAPRET_CHILD_PID}" dvtws2 ||
+        process_matches "${ZAPRET_SUPERVISOR_PID}" daemon zapret2 ||
+        /usr/bin/pgrep -x dvtws2 >/dev/null 2>&1 ||
+        /usr/bin/pgrep -f '^daemon: zapret2' >/dev/null 2>&1
+}
+
+blockcheck_packet_io_denied()
+{
+    # Do not treat the public-DNS probe's `ping: sendto` warning as a
+    # dvtws2 failure. Only match errors emitted while a divert packet is
+    # being generated or reinjected into the local PF/IPFW stack.
+    grep -Eq '^(rawsend_sendto_divert: sendto \([0-9]+\)|rawsend: sendto_divert|reinject sendto): (Permission denied|Operation not permitted)' "$1"
+}
 
 # cleanup() runs unconditionally on exit (normal exit, SIGTERM from
 # configd timeout, SSH disconnect, ^C). Without this trap, a kill
@@ -129,43 +259,181 @@ PREV_IPFW6=$(/sbin/sysctl -n net.inet6.ip6.fw.enable 2>/dev/null || echo 0)
 # rebuilds NAT and per-interface state), and restore ipfw to the
 # state we found it in.
 cleanup() {
-    # Re-enable pf and rebuild the OPNsense ruleset. `pfctl -e` is a
-    # no-op if pf is already enabled. `pfctl -f /tmp/rules.debug`
-    # reloads the last-generated OPNsense ruleset; if for any reason
-    # that file is gone, fall back to `configctl filter reload` which
-    # regenerates it from config.xml.
-    /sbin/pfctl -e   >/dev/null 2>&1
-    if [ -f /tmp/rules.debug ]; then
-        /sbin/pfctl -f /tmp/rules.debug >/dev/null 2>&1
-    else
-        /usr/local/sbin/configctl filter reload >/dev/null 2>&1
+    trap - INT TERM HUP
+
+    if [ "${FIREWALL_TOUCHED}" = "1" ]; then
+        # Re-enable pf and rebuild the OPNsense ruleset. `pfctl -e` is a
+        # no-op if pf is already enabled. `pfctl -f /tmp/rules.debug`
+        # reloads the last-generated OPNsense ruleset; if for any reason
+        # that file is gone, fall back to `configctl filter reload` which
+        # regenerates it from config.xml.
+        /sbin/pfctl -e >/dev/null 2>&1
+        if [ -f /tmp/rules.debug ]; then
+            /sbin/pfctl -f /tmp/rules.debug >/dev/null 2>&1
+        else
+            /usr/local/sbin/configctl filter reload >/dev/null 2>&1
+        fi
+
+        # ipfw teardown
+        /sbin/sysctl net.inet.ip.fw.enable=${PREV_IPFW} >/dev/null 2>&1
+        /sbin/sysctl net.inet6.ip6.fw.enable=${PREV_IPFW6} >/dev/null 2>&1
+        [ "${ADDED_BASELINE_RULE}" = "1" ] && /sbin/ipfw -q delete 65000 2>/dev/null
+        [ "${WAS_IPDIVERT_LOADED}" = "0" ] && /sbin/kldunload ipdivert 2>/dev/null
+        [ "${WAS_IPFW_LOADED}" = "0" ] && /sbin/kldunload ipfw 2>/dev/null
     fi
 
-    # ipfw teardown
-    /sbin/sysctl net.inet.ip.fw.enable=${PREV_IPFW}   >/dev/null 2>&1
-    /sbin/sysctl net.inet6.ip6.fw.enable=${PREV_IPFW6} >/dev/null 2>&1
-    /sbin/ipfw -q delete 65000 2>/dev/null
-    [ "${WAS_IPFW_LOADED}" = "0" ] && /sbin/kldunload ipfw 2>/dev/null
-
     # Bring zapret back if it was running
+    [ -n "${BLOCKCHECK_TMP}" ] && rm -f "${BLOCKCHECK_TMP}"
     [ "${WAS_RUNNING}" = "1" ] && /usr/local/sbin/configctl zapret start >/dev/null 2>&1
     # Note: we deliberately do NOT delete ${LOG} here. It lives at
     # /var/log/zapret/blockcheck-*.log and is part of the persistent
     # archive (rotated by the next run, not by us).
 }
-trap cleanup EXIT INT TERM HUP
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
 
-/sbin/kldstat -q -m ipdivert || /sbin/kldload ipdivert
-/sbin/kldstat -q -m ipfw     || /sbin/kldload ipfw
+# blockcheck2 refuses to run reliably while another DPI bypass is active.
+# Validate both daemon(8) pidfiles so a stale PID cannot make us stop an
+# unrelated process, and so the supervisor cannot respawn dvtws2 mid-scan.
+read_managed_pid "${ZAPRET_PIDFILE}" dvtws2
+child_state=$?
+[ "${child_state}" -eq 0 ] && ZAPRET_CHILD_PID="${CHECKED_PID}"
 
-# Add baseline allow BEFORE enabling. Rules can be added while ipfw is
-# disabled — they just don't take effect until enable=1. Using a fixed
-# high slot (65000) means we can find and delete it again on cleanup
-# without grepping the ruleset.
-/sbin/ipfw -q add 65000 allow ip from any to any 2>/dev/null
+read_managed_pid "${ZAPRET_SUPERVISOR_PIDFILE}" daemon zapret2
+supervisor_state=$?
+[ "${supervisor_state}" -eq 0 ] && ZAPRET_SUPERVISOR_PID="${CHECKED_PID}"
 
-/sbin/sysctl net.inet.ip.fw.enable=1   >/dev/null 2>&1
-/sbin/sysctl net.inet6.ip6.fw.enable=1 >/dev/null 2>&1
+if [ "${child_state}" -eq 2 ] || [ "${supervisor_state}" -eq 2 ]; then
+    emit_error "zapret pidfile points to an unexpected process"
+    exit 0
+fi
+
+if [ "${child_state}" -ne 0 ] && [ "${supervisor_state}" -ne 0 ]; then
+    if zapret_processes_running; then
+        emit_error "unmanaged zapret process is running"
+        exit 0
+    fi
+fi
+
+if [ "${child_state}" -eq 0 ] || [ "${supervisor_state}" -eq 0 ]; then
+    WAS_RUNNING=1
+
+    if ! /usr/local/sbin/configctl zapret stop >/dev/null 2>&1; then
+        emit_error "could not stop zapret before blockcheck"
+        exit 0
+    fi
+
+    stop_wait=0
+    while [ "${stop_wait}" -lt 50 ] && zapret_processes_running; do
+        sleep 0.1
+        stop_wait=$((stop_wait + 1))
+    done
+
+    if zapret_processes_running; then
+        emit_error "zapret processes did not stop before blockcheck"
+        exit 0
+    fi
+fi
+
+FIREWALL_TOUCHED=1
+
+if ! /sbin/kldstat -q -m ipdivert && ! /sbin/kldload ipdivert; then
+    emit_error "could not load ipdivert kernel module"
+    exit 0
+fi
+if ! /sbin/kldstat -q -m ipfw && ! /sbin/kldload ipfw; then
+    emit_error "could not load ipfw kernel module"
+    exit 0
+fi
+
+# Add a temporary baseline allow before enabling ipfw only when the kernel's
+# default policy is deny. Never reuse or delete an existing rule 65000: it may
+# belong to another OPNsense component.
+DEFAULT_TO_ACCEPT=$(/sbin/sysctl -n net.inet.ip.fw.default_to_accept 2>/dev/null || echo 0)
+if [ "${DEFAULT_TO_ACCEPT}" != "1" ]; then
+    if /sbin/ipfw -q list 65000 >/dev/null 2>&1; then
+        emit_error "cannot prepare ipfw: rule 65000 is already in use"
+        exit 0
+    fi
+    if ! /sbin/ipfw -q add 65000 allow ip from any to any 2>/dev/null; then
+        emit_error "could not install temporary ipfw safety rule"
+        exit 0
+    fi
+    if ! /sbin/ipfw -q list 65000 2>/dev/null | grep -q 'allow ip from any to any'; then
+        emit_error "temporary ipfw safety rule could not be verified"
+        exit 0
+    fi
+    ADDED_BASELINE_RULE=1
+fi
+
+if ! /sbin/sysctl net.inet.ip.fw.enable=1 >/dev/null 2>&1; then
+    emit_error "could not enable IPv4 ipfw"
+    exit 0
+fi
+if ! /sbin/sysctl net.inet6.ip6.fw.enable=1 >/dev/null 2>&1; then
+    emit_error "could not enable IPv6 ipfw"
+    exit 0
+fi
+
+# OPNsense must keep pf enabled while blockcheck runs.
+# Put ipfw ahead of pf in the pfil chain, then run a temporary copy of
+# upstream blockcheck2.sh with its per-test "pfctl -qd" disabled.
+BLOCKCHECK_RUN="${BLOCKCHECK}"
+
+if [ -f /usr/local/opnsense/version/core ]; then
+    if ! /sbin/pfctl -d >/dev/null 2>&1; then
+        emit_error "could not detach pf before pfil reordering"
+        exit 0
+    fi
+    if ! /sbin/pfctl -e >/dev/null 2>&1; then
+        emit_error "could not re-enable pf after pfil reordering"
+        exit 0
+    fi
+
+    PF_DISABLE_COUNT=$(grep -cF 'pf_is_avail && pfctl -qd' "${BLOCKCHECK}" 2>/dev/null || true)
+    DVTWS_START_COUNT=$(grep -cF '"$DVTWS2" --port=$IPFW_DIVERT_PORT ' "${BLOCKCHECK}" 2>/dev/null || true)
+    OUTBOUND_RULE_COUNT=$(grep -cF 'IPFW_ADD divert $IPFW_DIVERT_PORT $1 from me to $ip $2 proto ip${IPV} out not diverted' "${BLOCKCHECK}" 2>/dev/null || true)
+    INBOUND_RULE_COUNT=$(grep -cF 'IPFW_ADD divert $IPFW_DIVERT_PORT tcp from $ip $1 to me proto ip${IPV} tcpflags syn,ack in not diverted' "${BLOCKCHECK}" 2>/dev/null || true)
+
+    if [ "${PF_DISABLE_COUNT}" -ne 1 ] ||
+       [ "${DVTWS_START_COUNT}" -ne 1 ] ||
+       [ "${OUTBOUND_RULE_COUNT}" -ne 1 ] ||
+       [ "${INBOUND_RULE_COUNT}" -ne 1 ]; then
+        emit_error "unsupported blockcheck2.sh format (patch targets: pf=${PF_DISABLE_COUNT}, dvtws=${DVTWS_START_COUNT}, outbound=${OUTBOUND_RULE_COUNT}, inbound=${INBOUND_RULE_COUNT})"
+        exit 0
+    fi
+
+    BLOCKCHECK_TMP=$(/usr/bin/mktemp -t blockcheck2-opnsense.XXXXXX) || {
+        emit_error "could not create temporary OPNsense blockcheck wrapper"
+        exit 0
+    }
+
+    sed \
+        -e 's/pf_is_avail && pfctl -qd/: # OPNsense: keep pf enabled/' \
+        -e 's|"$DVTWS2" --port=$IPFW_DIVERT_PORT |"$DVTWS2" --port=$IPFW_DIVERT_PORT --sockarg=0x200 --user=nobody |' \
+        -e 's|IPFW_ADD divert $IPFW_DIVERT_PORT $1 from me to $ip $2 proto ip${IPV} out not diverted|IPFW_ADD divert $IPFW_DIVERT_PORT $1 from me to $ip $2 proto ip${IPV} out not diverted not sockarg xmit $IFACE_WAN|' \
+        -e 's|IPFW_ADD divert $IPFW_DIVERT_PORT tcp from $ip $1 to me proto ip${IPV} tcpflags syn,ack in not diverted|: # OPNsense: do not divert inbound SYN+ACK|' \
+        "${BLOCKCHECK}" > "${BLOCKCHECK_TMP}" || {
+        emit_error "could not prepare OPNsense blockcheck wrapper"
+        exit 0
+    }
+
+    PF_PATCH_COUNT=$(grep -cF ': # OPNsense: keep pf enabled' "${BLOCKCHECK_TMP}" 2>/dev/null || true)
+    DVTWS_PATCH_COUNT=$(grep -cF '"$DVTWS2" --port=$IPFW_DIVERT_PORT --sockarg=0x200 --user=nobody ' "${BLOCKCHECK_TMP}" 2>/dev/null || true)
+    OUTBOUND_PATCH_COUNT=$(grep -cF 'out not diverted not sockarg xmit $IFACE_WAN' "${BLOCKCHECK_TMP}" 2>/dev/null || true)
+    INBOUND_PATCH_COUNT=$(grep -cF ': # OPNsense: do not divert inbound SYN+ACK' "${BLOCKCHECK_TMP}" 2>/dev/null || true)
+
+    if [ "${PF_PATCH_COUNT}" -ne 1 ] ||
+       [ "${DVTWS_PATCH_COUNT}" -ne 1 ] ||
+       [ "${OUTBOUND_PATCH_COUNT}" -ne 1 ] ||
+       [ "${INBOUND_PATCH_COUNT}" -ne 1 ]; then
+        emit_error "could not verify patched blockcheck2.sh"
+        exit 0
+    fi
+
+    chmod 700 "${BLOCKCHECK_TMP}"
+    BLOCKCHECK_RUN="${BLOCKCHECK_TMP}"
+fi
 
 # Persistent per-run log so the user can review the full blockcheck2
 # output after the fact (the JSON-embedded log field is truncated to
@@ -200,21 +468,57 @@ ls -1t "${LOG_DIR}"/blockcheck-*.log 2>/dev/null | tail -n +51 | xargs rm -f 2>/
 # requested domain means the user can never silently get rutracker
 # results when they asked for something else.
 cd "${ZAPRET_DIR}"
-env \
-    BATCH=1 \
-    IFACE_WAN="${WAN_DEV}" \
-    DOMAINS="${DOMAIN}" \
-    DOMAINS_DEFAULT="${DOMAIN}" \
-    IPVS=4 \
-    ENABLE_HTTP=1 \
-    ENABLE_HTTPS_TLS12=1 \
-    ENABLE_HTTPS_TLS13=1 \
-    ENABLE_HTTP3=0 \
-    REPEATS=1 \
-    PARALLEL=0 \
-    SCANLEVEL=standard \
-    /usr/bin/timeout ${TIMEOUT} /bin/sh "${BLOCKCHECK}" >"${LOG}" 2>&1
+
+ZAPRET_BASE="${ZAPRET_DIR}"
+BATCH=1
+IFACE_WAN="${WAN_DEV}"
+DOMAINS="${DOMAIN}"
+DOMAINS_DEFAULT="${DOMAIN}"
+IPVS=4
+ENABLE_HTTP="${BC_HTTP}"
+ENABLE_HTTPS_TLS12="${BC_TLS12}"
+ENABLE_HTTPS_TLS13="${BC_TLS13}"
+ENABLE_HTTP3="${BC_HTTP3}"
+REPEATS=1
+PARALLEL=0
+SCANLEVEL=standard
+
+# Prefer the private HTTP/3-capable curl shipped with the plugin.
+# Fall back to the OPNsense system curl if it is unavailable.
+CURL_H3="/usr/local/libexec/zapret2/curl-h3/bin/curl"
+
+if [ -x "${CURL_H3}" ]; then
+    CURL="${CURL_H3}"
+elif [ -x /usr/local/bin/curl ]; then
+    CURL="/usr/local/bin/curl"
+else
+    CURL="curl"
+fi
+
+# curl-impersonate does not have an OPNsense CA path compiled in.
+# Reuse the firewall's own current CA bundle instead of shipping one.
+if [ -f /usr/local/share/certs/ca-root-nss.crt ]; then
+    CURL_CA_BUNDLE="/usr/local/share/certs/ca-root-nss.crt"
+elif [ -f /etc/ssl/cert.pem ]; then
+    CURL_CA_BUNDLE="/etc/ssl/cert.pem"
+else
+    CURL_CA_BUNDLE=""
+fi
+
+export ZAPRET_BASE BATCH IFACE_WAN DOMAINS DOMAINS_DEFAULT IPVS
+export ENABLE_HTTP ENABLE_HTTPS_TLS12 ENABLE_HTTPS_TLS13 ENABLE_HTTP3
+export REPEATS PARALLEL SCANLEVEL CURL
+
+if [ -n "${CURL_CA_BUNDLE}" ]; then
+    export CURL_CA_BUNDLE
+fi
+
+/usr/bin/timeout -k 30 -s TERM "${TIMEOUT}" \
+    /bin/sh "${BLOCKCHECK_RUN}" >"${LOG}" 2>&1
 EXIT=$?
+
+PACKET_IO_DENIED=0
+blockcheck_packet_io_denied "${LOG}" && PACKET_IO_DENIED=1
 
 # ipfw teardown, log cleanup, and zapret restart all happen in the
 # trap handler installed above — no manual cleanup needed here.
@@ -223,62 +527,63 @@ FINISHED_EPOCH=$(date -u +%s)
 FINISHED_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 DURATION=$((FINISHED_EPOCH - STARTED_EPOCH))
 
-# Try the proper SUMMARY first. blockcheck2 emits `* SUMMARY` only at
-# the end of a complete run; everything from that line to EOF is what
-# we want.
-SUMMARY=$(awk '/^\* SUMMARY/,0' "${LOG}" 2>/dev/null)
+# Prefer the final SUMMARY produced by current or older blockcheck2.
+SUMMARY=$(awk '/^[-*] SUMMARY/,0' "${LOG}" 2>/dev/null)
 
-# Fallback for timed-out / interrupted runs:
-# blockcheck2 prints `!!!!! <test>: working strategy found for ipv<X>
-# <domain> : <strategy> !!!!!` INLINE, the moment it confirms each
-# protocol's first winner — well before the final SUMMARY. So even on
-# `timeout`-induced kills we have actionable per-protocol picks. We
-# build a synthetic SUMMARY from those lines + any
-# "working without bypass" notes that were already recorded.
-#
-# This is what makes a 25-min run usable when the full sweep would
-# need 45+. The user gets HTTP+TLS12 winners even if TLS13 didn't
-# finish.
 PARTIAL=0
+
 if [ -z "${SUMMARY}" ]; then
     PARTIAL=1
-    INLINE_WINNERS=$(grep -E '^!!!!! curl_test_.*working strategy found' "${LOG}" 2>/dev/null \
-        | sed -E 's/^!!!!! ([^:]+): working strategy found for (ipv[46]) ([^ ]+) : (.+) !!!!!$/\1 \2 \3 : \4/' \
-        | head -10)
-    BASELINE_WINNERS=$(grep -E 'working without bypass' "${LOG}" 2>/dev/null | head -10)
 
-    # Combine into a SUMMARY-shaped block so downstream code paths see
-    # the same format as a real SUMMARY.
-    SUMMARY="* SUMMARY (partial — blockcheck did not finish, exit=${EXIT})"
-    [ -n "${INLINE_WINNERS}" ]   && SUMMARY="${SUMMARY}
-${INLINE_WINNERS}"
-    [ -n "${BASELINE_WINNERS}" ] && SUMMARY="${SUMMARY}
-${BASELINE_WINNERS}"
+    # blockcheck2 confirms each individual test with a terminal AVAILABLE
+    # marker before it eventually prints SUMMARY. The parser keeps that
+    # marker tied to its own candidate and clears failed candidates, so an
+    # unrelated later success cannot become a false winner.
+    CONFIRMED_WINNERS=$(awk -f "${WINNER_PARSER}" "${LOG}" 2>/dev/null | head -30)
 
-    # If neither path produced anything, we truly have no signal —
-    # surface as an error with the tail of the log so the user can
-    # see what blockcheck2 was doing when it died.
-    if [ -z "${INLINE_WINNERS}" ] && [ -z "${BASELINE_WINNERS}" ]; then
-        /usr/local/bin/jq -nc \
-            --arg msg "blockcheck did not produce a summary or any inline winners (exit=${EXIT})" \
-            --arg started "${STARTED_ISO}" \
-            --arg finished "${FINISHED_ISO}" \
-            --argjson duration "${DURATION}" \
-            --arg log_file "${LOG}" \
-            --rawfile log "${LOG}" \
-            '{status:"error", message:$msg, started:$started, finished:$finished, duration_seconds:$duration, log_file:$log_file, log:$log[-2000:]}'
-        exit 0
-    fi
+    SUMMARY="- SUMMARY (partial - blockcheck did not finish, exit=${EXIT})"
+
+    [ -n "${CONFIRMED_WINNERS}" ] && SUMMARY="${SUMMARY}
+${CONFIRMED_WINNERS}"
+
 fi
 
-# Extract useful lines from the summary. blockcheck2 produces:
-#   "working without bypass"  → site was never blocked; no strategy needed
-#   "<strategy> : works"      → a strategy that defeated the DPI
-#   "curl_test_* : ok"        → specific test that passed
-# Anything else is noise.
-WINNING=$(echo "${SUMMARY}" | grep -iE 'works|^[^ ]+ : ok|without bypass|working strategy found' | head -30)
+# Current SUMMARY format:
+#   curl_test_http3 ipv4 example.com : dvtws2 --payload=...
+# or a connection that already works without bypass.
+WINNING=$(printf '%s\n' "${SUMMARY}" \
+    | grep -E '^[[:space:]]*curl_test_.* : (dvtws2 --|working without bypass)' \
+    | sed -E 's/^[[:space:]]*//' \
+    | awk '!seen[$0]++' \
+    | head -30)
 
-/usr/local/bin/jq -nc \
+if [ "${PACKET_IO_DENIED}" = "1" ] && [ -z "${WINNING}" ]; then
+    "${JQ}" -nc \
+        --arg msg "local PF/IPFW stack denied dvtws2 packet injection; blockcheck results are invalid (exit=${EXIT})" \
+        --arg domain "${DOMAIN}" \
+        --arg summary "${SUMMARY}" \
+        --arg started "${STARTED_ISO}" \
+        --arg finished "${FINISHED_ISO}" \
+        --argjson duration "${DURATION}" \
+        --arg log_file "${LOG}" \
+        --rawfile log "${LOG}" \
+        '{status:"error", message:$msg, domain:$domain, started:$started, finished:$finished, duration_seconds:$duration, log_file:$log_file, summary:$summary, log:$log[-2000:]}'
+    exit 0
+fi
+
+if [ "${PARTIAL}" = "1" ] && [ -z "${WINNING}" ]; then
+    "${JQ}" -nc \
+        --arg msg "blockcheck did not produce a summary or any confirmed winners (exit=${EXIT})" \
+        --arg started "${STARTED_ISO}" \
+        --arg finished "${FINISHED_ISO}" \
+        --argjson duration "${DURATION}" \
+        --arg log_file "${LOG}" \
+        --rawfile log "${LOG}" \
+        '{status:"error", message:$msg, started:$started, finished:$finished, duration_seconds:$duration, log_file:$log_file, log:$log[-2000:]}'
+    exit 0
+fi
+
+"${JQ}" -nc \
     --arg domain "${DOMAIN}" \
     --arg summary "${SUMMARY}" \
     --arg winning "${WINNING}" \
@@ -287,6 +592,6 @@ WINNING=$(echo "${SUMMARY}" | grep -iE 'works|^[^ ]+ : ok|without bypass|working
     --argjson duration "${DURATION}" \
     --arg log_file "${LOG}" \
     --argjson partial "${PARTIAL}" \
-    '{status:"ok", domain:$domain, partial:($partial==1), started:$started, finished:$finished, duration_seconds:$duration, log_file:$log_file, summary:$summary, winning:($winning|split("\n"))}'
+    '{status:"ok", domain:$domain, partial:($partial==1), started:$started, finished:$finished, duration_seconds:$duration, log_file:$log_file, summary:$summary, winning:($winning|split("\n")|map(select(length > 0)))}'
 
 exit 0

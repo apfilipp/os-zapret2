@@ -46,6 +46,14 @@ if [ -d src/etc ]; then
     cp -R src/etc "${STAGE}/usr/local/etc"
 fi
 
+if [ -d src/share ]; then
+    cp -R src/share "${STAGE}/usr/local/share"
+fi
+
+echo "==> Building private HTTP/3 curl"
+"${REPO_ROOT}/scripts/build-curl-h3.sh" \
+    "${STAGE}/usr/local/libexec/zapret2/curl-h3"
+
 # Enforce executable bits (tar on macOS/Linux may not preserve them perfectly)
 find "${STAGE}" -name "*.sh" -type f -exec chmod 755 {} +
 find "${STAGE}" -name "zapret" -path "*/rc.d/*" -type f -exec chmod 755 {} +

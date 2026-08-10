@@ -32,6 +32,13 @@ jobs:
           find pkg -type f -exec sh -n {} \;
           find scripts -name "*.sh" -exec sh -n {} \;
 
+      - name: Test diagnostics and firewall helpers
+        run: |
+          sh tests/blockcheck_winners_test.sh
+          sh tests/blockcheck_process_test.sh
+          sh tests/strategy_test_wan_test.sh
+          sh tests/zapret_rule_capacity_test.sh
+
   build:
     name: Build FreeBSD ${{ matrix.major }} pkg
     runs-on: ubuntu-latest
@@ -42,7 +49,7 @@ jobs:
         include:
           # One package per FreeBSD major: pkg refuses to install across
           # majors (issue #5). 14.x covers OPNsense <= 26.4, 15.x covers 26.7+.
-          - release: "14.2"
+          - release: "14.3"
             major: "14"
           - release: "15.1"
             major: "15"
@@ -55,9 +62,10 @@ jobs:
           release: "${{ matrix.release }}"
           usesh: true
           prepare: |
-            pkg install -y jq
+            # See CI: package downloads may target a newer FreeBSD 14 minor.
+            env IGNORE_OSVERSION=yes pkg install -y jq
           run: |
-            sh scripts/build-pkg.sh
+            env IGNORE_OSVERSION=yes sh scripts/build-pkg.sh
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
