@@ -41,6 +41,23 @@ All notable changes to os-zapret2 are documented in this file.
   and now show an explicit backend/configd error instead of clearing the result
   field when no response is returned.
 - **QUIC hostlist handling** now follows upstream zapret semantics.
+- Invalid `zapret_service.sh` subcommands exit non-zero again instead of
+  reporting success.
+
+### Changed
+
+- **dvtws2 is now explicitly scoped with `--filter-tcp=<ports>`.** Previously
+  the daemon applied its strategy to everything the ipfw divert rules handed
+  it; the TCP profile is now bound to the configured Ports value so the new
+  QUIC profile can be attached as a separate `--new` profile. Behavior is
+  unchanged for the default `80,443`, but anyone relying on dvtws2 processing
+  traffic beyond the configured ports should re-check their setup.
+- **QUIC ipfw rules are only installed when a QUIC strategy is set.** Leaving
+  the QUIC Strategy field empty reproduces the pre-1.8.3 rule set exactly.
+- **The bundled HTTP/3 client is fetched from the FreeBSD `latest` repository
+  at build time**, so its version is not pinned. The resolved version is now
+  printed during the build and recorded in
+  `/usr/local/libexec/zapret2/curl-h3/VERSION`.
 
 ## v1.8.2 - 2026-07-28
 

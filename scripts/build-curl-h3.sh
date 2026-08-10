@@ -50,6 +50,19 @@ if [ -z "${PKG_FILE}" ]; then
     exit 1
 fi
 
+# The FreeBSD repo is queried as "latest", so the version we ship is whatever
+# upstream published at build time rather than a pinned release. Record it so
+# the shipped bundle can be audited against THIRD_PARTY_NOTICES and so a
+# surprise major bump is visible in the build log instead of silent.
+PKG_VERSION=$(basename "${PKG_FILE}" .pkg | sed 's/^curl-impersonate-//')
+
+if [ -z "${PKG_VERSION}" ]; then
+    echo "ERROR: could not determine curl-impersonate version from ${PKG_FILE}" >&2
+    exit 1
+fi
+
+echo "==> Resolved curl-impersonate version: ${PKG_VERSION}"
+
 echo "==> Extracting ${PKG_FILE}"
 
 tar -xf "${PKG_FILE}" -C "${ROOT}"
@@ -85,6 +98,8 @@ chmod 755 "${DEST}/bin/curl"
 
 cp -R "${LICENSE_DIR}/." "${DEST}/licenses/"
 
+printf 'curl-impersonate %s\n' "${PKG_VERSION}" > "${DEST}/VERSION"
+
 echo "==> Verifying private HTTP/3 curl"
 
 if ! "${DEST}/bin/curl" -V | grep -q 'HTTP3'; then
@@ -93,5 +108,5 @@ if ! "${DEST}/bin/curl" -V | grep -q 'HTTP3'; then
     exit 1
 fi
 
-echo "==> HTTP/3 curl bundle ready"
+echo "==> HTTP/3 curl bundle ready (curl-impersonate ${PKG_VERSION})"
 "${DEST}/bin/curl" -V
