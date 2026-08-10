@@ -6,6 +6,8 @@ All notable changes to os-zapret2 are documented in this file.
 
 ## v1.8.3 - 2026-08-10
 
+Most of this release was contributed by [apfilipp](https://github.com/apfilipp).
+
 ### Added
 
 - **Asynchronous Blockcheck diagnostics** with live progress, persistent logs,
