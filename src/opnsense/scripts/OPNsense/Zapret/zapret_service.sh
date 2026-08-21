@@ -210,9 +210,9 @@ add_ipfw_divert_rule() {
     local port="$4"
     local wan_dev="$5"
 
-    if [ -n "${EXCLUDE_NETS}" ]; then
+    if [ -n "${EXCLUDE_NETS:-}" ]; then
         /sbin/ipfw -f add "${rulenum}" divert "${DIVERT_PORT}" "${protocol}" \
-            from "${src_spec}" to not "${EXCLUDE_NETS}" "${port}" \
+            from "${src_spec}" to not "${EXCLUDE_NETS:-}" "${port}" \
             out not diverted not sockarg xmit "${wan_dev}" >/dev/null 2>&1
     else
         /sbin/ipfw -f add "${rulenum}" divert "${DIVERT_PORT}" "${protocol}" \
@@ -241,7 +241,7 @@ install_ipfw_rules() {
         # Address lists are quoted: IFS is "," here and each list must
         # reach ipfw as a single token.
         if ! add_ipfw_divert_rule "${rulenum}" tcp "${src_spec}" "${port}" "${wan_dev}"; then
-            echo "failed to install ipfw divert rule for port ${port} from '${src_spec}' excluding '${EXCLUDE_NETS}' — check Source/Exclude Networks syntax" >&2
+            echo "failed to install ipfw divert rule for port ${port} from '${src_spec}' excluding '${EXCLUDE_NETS:-}' — check Source/Exclude Networks syntax" >&2
             remove_ipfw_rules
             IFS="${IFS_SAVED}"
             return 1
@@ -249,7 +249,7 @@ install_ipfw_rules() {
 
         if [ -n "${SOURCE_NETS}" ]; then
             if ! add_ipfw_divert_rule "${rulenum}" tcp me "${port}" "${wan_dev}"; then
-                echo "failed to install firewall-originated ipfw divert rule for port ${port} excluding '${EXCLUDE_NETS}' — check Exclude Networks syntax" >&2
+                echo "failed to install firewall-originated ipfw divert rule for port ${port} excluding '${EXCLUDE_NETS:-}' — check Exclude Networks syntax" >&2
                 remove_ipfw_rules
                 IFS="${IFS_SAVED}"
                 return 1
@@ -265,7 +265,7 @@ install_ipfw_rules() {
     # (19002 with the default PORTS="80,443").
     if [ -n "${QUIC_ARGS}" ]; then
         if ! add_ipfw_divert_rule "${rulenum}" udp "${src_spec}" 443 "${wan_dev}"; then
-            echo "failed to install ipfw QUIC divert rule from '${src_spec}' excluding '${EXCLUDE_NETS}' — check Source/Exclude Networks syntax" >&2
+            echo "failed to install ipfw QUIC divert rule from '${src_spec}' excluding '${EXCLUDE_NETS:-}' — check Source/Exclude Networks syntax" >&2
             remove_ipfw_rules
             IFS="${IFS_SAVED}"
             return 1
@@ -273,7 +273,7 @@ install_ipfw_rules() {
 
         if [ -n "${SOURCE_NETS}" ]; then
             if ! add_ipfw_divert_rule "${rulenum}" udp me 443 "${wan_dev}"; then
-                echo "failed to install firewall-originated ipfw QUIC divert rule excluding '${EXCLUDE_NETS}' — check Exclude Networks syntax" >&2
+                echo "failed to install firewall-originated ipfw QUIC divert rule excluding '${EXCLUDE_NETS:-}' — check Exclude Networks syntax" >&2
                 remove_ipfw_rules
                 IFS="${IFS_SAVED}"
                 return 1
