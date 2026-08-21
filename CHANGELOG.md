@@ -4,6 +4,13 @@ All notable changes to os-zapret2 are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Destination network exclusions** in General Settings. Administrators can
+  list IPv4 hosts or CIDR networks that must bypass zapret2. Matching TCP and
+  QUIC traffic passes through the ordinary OPNsense firewall path without
+  being diverted to dvtws2.
+
 ## v1.8.3 - 2026-08-10
 
 Most of this release was contributed by [apfilipp](https://github.com/apfilipp).
