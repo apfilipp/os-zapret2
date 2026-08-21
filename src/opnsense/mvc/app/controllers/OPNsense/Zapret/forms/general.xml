@@ -35,6 +35,17 @@
             exercising the bypass path.]]></help>
     </field>
     <field>
+        <id>zapret.general.excludenets</id>
+        <label>Exclude Networks</label>
+        <type>select_multiple</type>
+        <style>tokenize</style>
+        <allownew>true</allownew>
+        <help><![CDATA[Destination IPv4 networks or individual addresses that must bypass zapret2
+            (e.g. <code>203.0.113.0/24</code> or <code>203.0.113.10</code>).
+            Traffic <b>to</b> these destinations passes through unchanged.
+            Leave empty to exclude nothing.]]></help>
+    </field>
+    <field>
         <id>zapret.general.divertport</id>
         <label>Divert Port</label>
         <type>text</type>
