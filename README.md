@@ -98,6 +98,7 @@ The `ipfw` rules live in the reserved range 19000-19010 and are reinstalled on e
 
 - **`daemon -r` supervision.** If dvtws2 dies, `daemon(8)` auto-restarts it within ~1 second — only a few in-flight packets get dropped by the unhandled divert socket during the restart window.
 - **Watchdog auto-stop.** Every minute, a watchdog probes `https://example.com` through the bypass. If 3 consecutive checks fail (= a misconfigured strategy is breaking general HTTPS, or dvtws2 genuinely won't stay up), the watchdog calls `configctl zapret stop` itself. That removes the `ipfw` divert rules and traffic flows through unbypassed again; full recovery in ~3 minutes without anyone touching anything. Check `tail /var/log/messages | grep zapret-watchdog` for the reason. Override the probe URL via `/usr/local/etc/zapret2/watchdog.conf` (`CONTROL_URL=https://...`).
+- **Watchdog can be disabled.** General Settings → **Enable safety watchdog** turns the watchdog off completely — no control probes at all. The same works per host with `WATCHDOG_ENABLED=0` in `/usr/local/etc/zapret2/watchdog.conf` (the manual file takes precedence over the GUI setting).
 - **No DNS changes required.** The plugin operates at the packet level; your DNS configuration is independent. (For ISP DNS poisoning, pair this with AdGuard/Unbound DoH, which OPNsense supports natively.)
 - **WAN-only.** The `ipfw` rules are scoped with `xmit <wan_dev>`; LAN-to-LAN traffic and other interfaces are untouched.
 
@@ -109,7 +110,7 @@ The `ipfw` rules live in the reserved range 19000-19010 and are reinstalled on e
 
 **Service won't start — "dvtws2 child failed to start".** Run `setup.sh` again — the binary may not have compiled. Check `ls /usr/local/etc/zapret2/binaries/my/dvtws2`. If missing, `cd /usr/local/etc/zapret2 && make`.
 
-**Bypass auto-stops repeatedly.** The watchdog is doing its job — your strategy is dropping general HTTPS. Either find a different strategy via Blockcheck or switch **Host List Mode** to `Only specific domains` and list just the censored sites.
+**Bypass auto-stops repeatedly.** The watchdog is doing its job — your strategy is dropping general HTTPS. Either find a different strategy via Blockcheck or switch **Host List Mode** to `Only specific domains` and list just the censored sites. If you'd rather keep the service running without watchdog intervention, uncheck **Enable safety watchdog** in General Settings.
 
 ## License
 

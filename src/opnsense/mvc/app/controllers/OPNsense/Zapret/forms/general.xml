@@ -10,6 +10,17 @@
         <help>Enable zapret2 DPI bypass service.</help>
     </field>
     <field>
+        <id>zapret.general.watchdogenabled</id>
+        <label>Enable safety watchdog</label>
+        <type>checkbox</type>
+        <help><![CDATA[Every minute the watchdog probes a control URL (default <code>https://example.com</code>)
+            through the bypass. After 3 consecutive failures it stops the service automatically,
+            so a broken strategy cannot keep your internet down.<br/><br/>
+            Uncheck to disable the watchdog entirely — no control probes will be made at all.
+            Can also be overridden per host via <code>/usr/local/etc/zapret2/watchdog.conf</code>
+            (<code>WATCHDOG_ENABLED=0</code>, <code>CONTROL_URL=...</code>).]]></help>
+    </field>
+    <field>
         <id>zapret.general.waninterface</id>
         <label>WAN Interface</label>
         <type>dropdown</type>

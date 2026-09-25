@@ -4,6 +4,14 @@ All notable changes to os-zapret2 are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Watchdog disable option.** A new "Enable safety watchdog" checkbox in
+  General Settings turns the watchdog off completely when unchecked — no
+  control-URL probes are made at all. The same can be set per host with
+  `WATCHDOG_ENABLED=0` in `/usr/local/etc/zapret2/watchdog.conf`, which now
+  also takes precedence over the GUI-generated `zapret.conf`.
+
 ## v1.8.3 - 2026-08-10
 
 Most of this release was contributed by [apfilipp](https://github.com/apfilipp).
