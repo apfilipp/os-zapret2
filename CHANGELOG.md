@@ -6,6 +6,10 @@ All notable changes to os-zapret2 are documented in this file.
 
 ### Added
 
+- **Destination network exclusions** in General Settings. Administrators can
+  list IPv4 hosts or CIDR networks that must bypass zapret2. Matching TCP and
+  QUIC traffic passes through the ordinary OPNsense firewall path without
+  being diverted to dvtws2.
 - **Watchdog disable option.** A new "Enable safety watchdog" checkbox in
   General Settings turns the watchdog off completely when unchecked — no
   control-URL probes are made at all. The same can be set per host with
